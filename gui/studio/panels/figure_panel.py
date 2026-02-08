@@ -1,9 +1,10 @@
 """Figure settings panel — size, DPI, margins, spacing."""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QDoubleSpinBox, QSpinBox,
-    QCheckBox, QLabel, QGroupBox, QComboBox,
+    QCheckBox, QLabel, QGroupBox, QComboBox, QScrollArea,
 )
 from PySide6.QtCore import Signal
+from geo_figure.gui.studio.panels import CollapsibleSection
 
 
 class FigurePanel(QWidget):
@@ -13,13 +14,23 @@ class FigurePanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        # -- Size group --
-        size_grp = QGroupBox("Figure Size")
-        size_form = QFormLayout(size_grp)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        # -- Size --
+        size_sec = CollapsibleSection("Figure Size")
+        size_form = QFormLayout(size_sec.content)
+        size_form.setContentsMargins(8, 2, 4, 2)
         size_form.setSpacing(4)
 
         self.width_spin = QDoubleSpinBox()
@@ -42,11 +53,12 @@ class FigurePanel(QWidget):
         self.dpi_spin.setSingleStep(50)
         size_form.addRow("DPI:", self.dpi_spin)
 
-        layout.addWidget(size_grp)
+        layout.addWidget(size_sec)
 
-        # -- Margins group --
-        margin_grp = QGroupBox("Margins (inches)")
-        margin_form = QFormLayout(margin_grp)
+        # -- Margins --
+        margin_sec = CollapsibleSection("Margins (inches)")
+        margin_form = QFormLayout(margin_sec.content)
+        margin_form.setContentsMargins(8, 2, 4, 2)
         margin_form.setSpacing(4)
 
         self.margin_left = self._margin_spin(0.70)
@@ -58,52 +70,55 @@ class FigurePanel(QWidget):
         self.margin_bottom = self._margin_spin(0.55)
         margin_form.addRow("Bottom:", self.margin_bottom)
 
-        layout.addWidget(margin_grp)
+        layout.addWidget(margin_sec)
 
-        # -- Spacing group --
-        spacing_grp = QGroupBox("Subplot Spacing (inches)")
-        spacing_form = QFormLayout(spacing_grp)
+        # -- Spacing --
+        spacing_sec = CollapsibleSection("Subplot Spacing (inches)")
+        spacing_form = QFormLayout(spacing_sec.content)
+        spacing_form.setContentsMargins(8, 2, 4, 2)
         spacing_form.setSpacing(4)
 
-        self.hspace_spin = self._margin_spin(0.40)
+        self.hspace_spin = self._margin_spin(0.90)
         spacing_form.addRow("Between Rows:", self.hspace_spin)
-        self.vspace_spin = self._margin_spin(0.40)
+        self.vspace_spin = self._margin_spin(0.90)
         spacing_form.addRow("Between Columns:", self.vspace_spin)
 
         self.tight_check = QCheckBox("Tight Layout")
         spacing_form.addRow(self.tight_check)
 
-        layout.addWidget(spacing_grp)
+        layout.addWidget(spacing_sec)
 
-        # -- Vs Profile layout group (shown only when Vs data present) --
-        self._vs_grp = QGroupBox("Vs Profile Layout")
-        vs_form = QFormLayout(self._vs_grp)
+        # -- Vs Profile layout (shown only when Vs data present) --
+        self._vs_sec = CollapsibleSection("Vs Profile Layout")
+        vs_form = QFormLayout(self._vs_sec.content)
+        vs_form.setContentsMargins(8, 2, 4, 2)
         vs_form.setSpacing(4)
 
         self.vs_gap_spin = QDoubleSpinBox()
         self.vs_gap_spin.setRange(0.0, 1.0)
-        self.vs_gap_spin.setValue(0.12)
+        self.vs_gap_spin.setValue(0.05)
         self.vs_gap_spin.setSingleStep(0.02)
         vs_form.addRow("Vs / Sigma Gap:", self.vs_gap_spin)
 
         self.vs_ratio_spin = QDoubleSpinBox()
-        self.vs_ratio_spin.setRange(1.0, 10.0)
-        self.vs_ratio_spin.setValue(3.0)
-        self.vs_ratio_spin.setSingleStep(0.5)
+        self.vs_ratio_spin.setRange(0.1, 1.0)
+        self.vs_ratio_spin.setValue(0.75)
+        self.vs_ratio_spin.setSingleStep(0.05)
         vs_form.addRow("Vs Width Ratio:", self.vs_ratio_spin)
 
         self.sig_ratio_spin = QDoubleSpinBox()
-        self.sig_ratio_spin.setRange(0.5, 5.0)
-        self.sig_ratio_spin.setValue(1.0)
-        self.sig_ratio_spin.setSingleStep(0.25)
+        self.sig_ratio_spin.setRange(0.05, 0.9)
+        self.sig_ratio_spin.setValue(0.25)
+        self.sig_ratio_spin.setSingleStep(0.05)
         vs_form.addRow("Sigma Width Ratio:", self.sig_ratio_spin)
 
-        self._vs_grp.setVisible(False)
-        layout.addWidget(self._vs_grp)
+        self._vs_sec.setVisible(False)
+        layout.addWidget(self._vs_sec)
 
         # -- Subplot Ratios (grid mode only) --
-        self._ratio_grp = QGroupBox("Subplot Width Ratios")
-        ratio_form = QFormLayout(self._ratio_grp)
+        self._ratio_sec = CollapsibleSection("Subplot Width Ratios")
+        ratio_form = QFormLayout(self._ratio_sec.content)
+        ratio_form.setContentsMargins(8, 2, 4, 2)
         ratio_form.setSpacing(4)
 
         self.ratio_subplot_combo = QComboBox()
@@ -120,10 +135,10 @@ class FigurePanel(QWidget):
         self.ratio_spin.valueChanged.connect(self._on_ratio_value_changed)
         ratio_form.addRow("Width Ratio:", self.ratio_spin)
 
-        self._ratio_grp.setVisible(False)
+        self._ratio_sec.setVisible(False)
         self._ratio_data = {}  # col_index -> ratio value
         self._ratio_updating = False
-        layout.addWidget(self._ratio_grp)
+        layout.addWidget(self._ratio_sec)
 
         layout.addStretch()
 
@@ -191,8 +206,8 @@ class FigurePanel(QWidget):
         self.blockSignals(False)
 
     def set_vs_visible(self, visible: bool):
-        """Show/hide the Vs Profile layout group."""
-        self._vs_grp.setVisible(visible)
+        """Show/hide the Vs Profile layout section."""
+        self._vs_sec.setVisible(visible)
 
     # -- Subplot ratio controls -------------------------------------------
 
@@ -216,11 +231,11 @@ class FigurePanel(QWidget):
                         self._ratio_data[c] = col_ratios[c] if c < len(col_ratios) else 1.0
 
         if len(self._ratio_data) < 2:
-            self._ratio_grp.setVisible(False)
+            self._ratio_sec.setVisible(False)
             self._ratio_updating = False
             return
 
-        self._ratio_grp.setVisible(True)
+        self._ratio_sec.setVisible(True)
         for c, name in sorted(col_names):
             self.ratio_subplot_combo.addItem(
                 f"Column {c + 1}: {name}", c

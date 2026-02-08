@@ -91,6 +91,10 @@ class VsProfileDialog(QDialog):
         self.depth_max_spin.setSuffix(" m")
         form.addRow("Max Depth:", self.depth_max_spin)
 
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["Metric (m, m/s)", "Imperial (ft, ft/s)"])
+        form.addRow("Output Units:", self.unit_combo)
+
         layout.addWidget(settings_group)
 
         # Progress
@@ -165,6 +169,7 @@ class VsProfileDialog(QDialog):
         self._extract_params = {
             "profile_type": profile_type,
             "depth_max": self.depth_max_spin.value(),
+            "units": "ft" if self.unit_combo.currentIndex() == 1 else "m",
         }
 
         self._worker = ProfileWorker(params, self)

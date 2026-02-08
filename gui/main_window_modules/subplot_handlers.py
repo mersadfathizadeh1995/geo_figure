@@ -88,3 +88,11 @@ class SubplotHandlersMixin:
         cols = canvas._grid_cols if layout_mode == "grid" else 0
         ratios = list(canvas._grid_col_ratios)
         self.sheet_panel.set_grid_col_ratios(cols, ratios)
+
+        # Show Vs Profile Layout if any cell is vs_profile
+        has_vs = any(
+            t == "vs_profile" for t in canvas._subplot_types.values()
+        ) or layout_mode == "vs_profile"
+        self.sheet_panel.set_vs_visible(has_vs)
+        if has_vs:
+            self.sheet_panel.set_vs_ratios(*canvas._vs_internal_ratios)

@@ -25,7 +25,7 @@ class LayersPanel(QWidget):
         grp_layout.setContentsMargins(4, 4, 4, 4)
 
         self._tree = QTreeWidget()
-        self._tree.setHeaderLabels(["Layer", "Subplot"])
+        self._tree.setHeaderLabels(["Layer"])
         self._tree.header().setStretchLastSection(True)
         self._tree.header().setSectionResizeMode(
             0, QHeaderView.ResizeMode.Stretch
@@ -64,7 +64,6 @@ class LayersPanel(QWidget):
         for sp_key, sp_name in subplot_info:
             sp_item = QTreeWidgetItem(self._tree)
             sp_item.setText(0, sp_name or sp_key)
-            sp_item.setText(1, "")
             sp_item.setExpanded(True)
             font = sp_item.font(0)
             font.setBold(True)

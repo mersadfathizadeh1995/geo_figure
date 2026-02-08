@@ -45,7 +45,7 @@ class SheetPanel(QWidget):
     sheet_name_changed = Signal(str)       # new name
     legend_changed = Signal(dict)          # full legend config
     col_ratios_changed = Signal(list)      # per-column width ratios
-    vs_ratios_changed = Signal(float, float)  # vs_ratio, sigma_ratio
+    vs_ratio_changed = Signal(float)       # vs:sigma ratio (e.g. 3.0 = 3:1)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,21 +139,16 @@ class SheetPanel(QWidget):
 
         # -- Vs Profile Layout (shown when a Vs cell exists) --
         self._vs_sec = _CollapsibleSection("Vs Profile Layout", expanded=True)
-        self.vs_ratio_spin = QDoubleSpinBox()
-        self.vs_ratio_spin.setRange(0.5, 10.0)
-        self.vs_ratio_spin.setSingleStep(0.5)
-        self.vs_ratio_spin.setDecimals(1)
-        self.vs_ratio_spin.setValue(3.0)
-        self.vs_ratio_spin.valueChanged.connect(self._on_vs_ratio_changed)
-        self._vs_sec.form.addRow("Vs Width:", self.vs_ratio_spin)
-
-        self.sig_ratio_spin = QDoubleSpinBox()
-        self.sig_ratio_spin.setRange(0.5, 5.0)
-        self.sig_ratio_spin.setSingleStep(0.25)
-        self.sig_ratio_spin.setDecimals(1)
-        self.sig_ratio_spin.setValue(1.0)
-        self.sig_ratio_spin.valueChanged.connect(self._on_vs_ratio_changed)
-        self._vs_sec.form.addRow("Sigma Width:", self.sig_ratio_spin)
+        self.vs_sigma_ratio_spin = QDoubleSpinBox()
+        self.vs_sigma_ratio_spin.setRange(1.0, 10.0)
+        self.vs_sigma_ratio_spin.setSingleStep(0.5)
+        self.vs_sigma_ratio_spin.setDecimals(1)
+        self.vs_sigma_ratio_spin.setValue(3.0)
+        self.vs_sigma_ratio_spin.setToolTip(
+            "Vs plot width relative to Sigma plot width (e.g. 3.0 = Vs is 3x wider)"
+        )
+        self.vs_sigma_ratio_spin.valueChanged.connect(self._on_vs_ratio_changed)
+        self._vs_sec.form.addRow("Vs / Sigma:", self.vs_sigma_ratio_spin)
 
         self._vs_sec.setVisible(False)
         layout.addWidget(self._vs_sec)
@@ -276,3 +271,21 @@ class SheetPanel(QWidget):
     def get_grid_col_ratios(self) -> list:
         """Return current ratio values."""
         return [s.value() for s in self._ratio_spins]
+
+    # -- Vs profile ratio API ---------------------------------------------
+
+    def set_vs_visible(self, visible: bool):
+        """Show/hide Vs Profile Layout section."""
+        self._vs_sec.setVisible(visible)
+
+    def set_vs_ratios(self, vs_ratio: float, sig_ratio: float):
+        """Populate Vs/sigma ratio spinbox from (vs, sig) tuple."""
+        self._updating = True
+        ratio = vs_ratio / max(sig_ratio, 0.1)
+        self.vs_sigma_ratio_spin.setValue(ratio)
+        self._updating = False
+
+    def _on_vs_ratio_changed(self):
+        if self._updating:
+            return
+        self.vs_ratio_changed.emit(self.vs_sigma_ratio_spin.value())

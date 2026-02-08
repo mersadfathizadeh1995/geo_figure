@@ -166,6 +166,7 @@ class MainWindow(
         self.sheet_panel.legend_changed.connect(self._on_legend_changed)
         self.sheet_panel.sheet_name_changed.connect(self._on_sheet_name_changed)
         self.sheet_panel.col_ratios_changed.connect(self._on_col_ratios_changed)
+        self.sheet_panel.vs_ratio_changed.connect(self._on_vs_ratio_changed)
 
         # Canvas signals
         canvas = self.sheet_tabs.get_current_canvas()

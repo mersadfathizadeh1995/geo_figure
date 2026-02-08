@@ -156,9 +156,10 @@ class CurveTreePanel(QWidget):
             root = QTreeWidgetItem(self.tree, [f"{name} (0)"])
             root.setData(0, _ROLE_UID, f"{_SUBPLOT_PREFIX}{key}")
             root.setExpanded(True)
-            flags = root.flags() & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsSelectable
+            flags = root.flags() & ~Qt.ItemIsDragEnabled
             root.setFlags(flags)
             self._subplot_roots[key] = root
+        self._active_subplot_key = ""
         self.tree.blockSignals(False)
 
     def add_curve(self, curve: CurveData):
@@ -383,6 +384,7 @@ class CurveTreePanel(QWidget):
         uid_str = str(uid)
         if uid_str.startswith(_SUBPLOT_PREFIX):
             key = uid_str.replace(_SUBPLOT_PREFIX, "")
+            self._highlight_subplot(key)
             self.subplot_activated.emit(key)
             return
         if uid_str.startswith(_ENSEMBLE_PREFIX):
@@ -390,7 +392,6 @@ class CurveTreePanel(QWidget):
             self.ensemble_selected.emit(ens_uid)
         elif uid_str.startswith(_PROFILE_PREFIX):
             prof_uid = uid_str.replace(_PROFILE_PREFIX, "")
-            # Check if a specific layer child was clicked
             layer_data = item.data(0, _ROLE_POINT_IDX)
             layer_name = ""
             if layer_data is not None and str(layer_data).startswith(_LAYER_PREFIX):
@@ -398,6 +399,24 @@ class CurveTreePanel(QWidget):
             self.vs_profile_selected.emit(prof_uid, layer_name)
         else:
             self.curve_selected.emit(uid_str)
+
+    def _highlight_subplot(self, key: str):
+        """Visually highlight the active subplot root item."""
+        self._active_subplot_key = key
+        highlight = QColor("#D0E8FF")  # light blue highlight
+        no_bg = QBrush()
+        bold_font_flag = True
+        for k, root in self._subplot_roots.items():
+            if k == key:
+                root.setBackground(0, QBrush(highlight))
+                font = root.font(0)
+                font.setBold(True)
+                root.setFont(0, font)
+            else:
+                root.setBackground(0, no_bg)
+                font = root.font(0)
+                font.setBold(False)
+                root.setFont(0, font)
 
     def _on_item_changed(self, item: QTreeWidgetItem, column: int):
         uid = item.data(0, _ROLE_UID)

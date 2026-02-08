@@ -17,6 +17,9 @@ class TypographyConfig:
     tick_label_size: float = 10.0
     legend_size: float = 9.0
     annotation_size: float = 9.0
+    title_pad: float = 6.0              # padding between title and axes (pts)
+    label_pad: float = 4.0              # padding between axis label and ticks (pts)
+    bold_ticks: bool = False            # bold tick labels
 
 
 @dataclass
@@ -70,7 +73,7 @@ class LegendConfig:
     """Legend appearance and positioning."""
     show: bool = True
     location: str = "upper right"
-    outside: bool = False                # place outside axes
+    placement: str = "inside"            # "inside", "outside_left", "outside_right", "outside_top", "outside_bottom"
     bbox_anchor: Optional[Tuple[float, float]] = None
     ncol: int = 1
     fontsize: Optional[float] = None     # None = use typography legend_size
@@ -78,6 +81,7 @@ class LegendConfig:
     frame_alpha: float = 0.9
     shadow: bool = False
     title: str = ""
+    markerscale: float = 1.0             # scale for legend markers/lines
 
 
 @dataclass
@@ -90,8 +94,8 @@ class FigureConfig:
     margin_right: float = 0.25
     margin_top: float = 0.50
     margin_bottom: float = 0.55
-    hspace: float = 0.40                 # inches between subplot rows
-    vspace: float = 0.40                 # inches between subplot columns
+    hspace: float = 0.90                 # inches between subplot rows
+    vspace: float = 0.90                 # inches between subplot columns
     tight_layout: bool = False
     facecolor: str = "white"
 
@@ -122,15 +126,33 @@ class StudioSettings:
     # Per-subplot axis overrides (key = subplot_key from FigureState)
     axis_overrides: Dict[str, AxisConfig] = field(default_factory=dict)
 
+    # Per-subplot legend overrides
+    legend_overrides: Dict[str, LegendConfig] = field(default_factory=dict)
+
     # Spine visibility
     spine_linewidth: float = 1.1
 
+    # Legend scale (applies to all legend text/markers)
+    legend_scale: float = 1.0
+
     # VS profile specific
-    vs_wspace: float = 0.12             # gap between Vs and sigma_ln subplots
-    vs_width_ratios: Tuple[float, float] = (3.0, 1.0)
+    vs_wspace: float = 0.05             # gap between Vs and sigma_ln subplots
+    vs_width_ratios: Tuple[float, float] = (0.75, 0.25)
 
     def axis_for(self, subplot_key: str) -> AxisConfig:
         """Get axis config for a subplot, creating a default if needed."""
         if subplot_key not in self.axis_overrides:
             self.axis_overrides[subplot_key] = AxisConfig()
         return self.axis_overrides[subplot_key]
+
+    def legend_for(self, subplot_key: str) -> LegendConfig:
+        """Get legend config for a subplot, creating from global defaults if needed."""
+        if subplot_key not in self.legend_overrides:
+            g = self.legend
+            self.legend_overrides[subplot_key] = LegendConfig(
+                show=g.show, location=g.location, placement=g.placement,
+                ncol=g.ncol, fontsize=g.fontsize, frame_on=g.frame_on,
+                frame_alpha=g.frame_alpha, shadow=g.shadow, title=g.title,
+                markerscale=g.markerscale,
+            )
+        return self.legend_overrides[subplot_key]

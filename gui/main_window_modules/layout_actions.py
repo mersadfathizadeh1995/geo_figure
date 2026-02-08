@@ -91,3 +91,8 @@ class LayoutActionsMixin:
         """Apply column width ratios to the current canvas."""
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.set_grid_col_ratios(ratios)
+
+    def _on_vs_ratio_changed(self, ratio: float):
+        """Apply Vs/Sigma ratio to the current canvas."""
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.set_vs_internal_ratios(ratio, 1.0)

@@ -3,6 +3,7 @@ import os
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QComboBox, QCheckBox,
     QGroupBox, QPushButton, QFileDialog, QLabel, QHBoxLayout,
+    QSpinBox,
 )
 from PySide6.QtCore import Signal
 
@@ -12,6 +13,7 @@ QUALITY_PRESETS = {
     "Presentation (200 DPI)": 200,
     "Publication (300 DPI)": 300,
     "High Quality (600 DPI)": 600,
+    "Custom": None,
 }
 
 
@@ -39,7 +41,18 @@ class ExportPanel(QWidget):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(QUALITY_PRESETS.keys())
         self.quality_combo.setCurrentIndex(2)  # Publication
+        self.quality_combo.currentIndexChanged.connect(self._on_quality_changed)
         fmt_form.addRow("Quality:", self.quality_combo)
+
+        self.custom_dpi_spin = QSpinBox()
+        self.custom_dpi_spin.setRange(72, 4800)
+        self.custom_dpi_spin.setValue(300)
+        self.custom_dpi_spin.setSuffix(" DPI")
+        self.custom_dpi_spin.setVisible(False)
+        fmt_form.addRow("Custom DPI:", self.custom_dpi_spin)
+        self._custom_dpi_label = fmt_form.labelForField(self.custom_dpi_spin)
+        if self._custom_dpi_label:
+            self._custom_dpi_label.setVisible(False)
 
         self.transparent_check = QCheckBox("Transparent Background")
         fmt_form.addRow(self.transparent_check)
@@ -47,6 +60,12 @@ class ExportPanel(QWidget):
         self.tight_check = QCheckBox("Tight Bounding Box")
         self.tight_check.setChecked(True)
         fmt_form.addRow(self.tight_check)
+
+        self.legend_separate_check = QCheckBox("Save Legend Separately")
+        self.legend_separate_check.setToolTip(
+            "Export the legend as a separate image file alongside the figure"
+        )
+        fmt_form.addRow(self.legend_separate_check)
 
         layout.addWidget(fmt_grp)
 
@@ -69,11 +88,20 @@ class ExportPanel(QWidget):
         layout.addWidget(btn_grp)
         layout.addStretch()
 
+    def _on_quality_changed(self, index):
+        is_custom = self.quality_combo.currentText() == "Custom"
+        self.custom_dpi_spin.setVisible(is_custom)
+        if self._custom_dpi_label:
+            self._custom_dpi_label.setVisible(is_custom)
+
     def get_export_options(self) -> dict:
         """Return current export options as a dict."""
         fmt = self.format_combo.currentText().lower()
         quality_txt = self.quality_combo.currentText()
-        dpi = QUALITY_PRESETS.get(quality_txt, 300)
+        if quality_txt == "Custom":
+            dpi = self.custom_dpi_spin.value()
+        else:
+            dpi = QUALITY_PRESETS.get(quality_txt, 300)
         return {
             "format": fmt,
             "dpi": dpi,
@@ -81,6 +109,7 @@ class ExportPanel(QWidget):
             "bbox_inches": "tight" if self.tight_check.isChecked() else None,
             "pad_inches": 0.1 if self.tight_check.isChecked() else None,
             "facecolor": "none" if self.transparent_check.isChecked() else "white",
+            "legend_separate": self.legend_separate_check.isChecked(),
         }
 
     def _on_export(self):

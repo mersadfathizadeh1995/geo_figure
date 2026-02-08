@@ -79,31 +79,84 @@ class MplRenderer:
         # Post-process: linked axes, frequency ticks, label visibility
         self._post_process(axes_map)
 
-        # Apply layout — adjust margins for legend placement
-        if settings.legend.outside:
-            fig.subplots_adjust(right=0.75)
-        if settings.figure.tight_layout and not settings.legend.outside:
+        # Create combined outside legend if any subplot requests it
+        has_outside = any(
+            settings.legend_for(k).placement != "inside"
+            and settings.legend_for(k).show
+            for k in axes_map
+            if not k.endswith("_sigma") and k != "sigma_ln"
+        )
+        self._outside_legend = None
+        if has_outside:
+            self._outside_legend = self._create_outside_legend(fig, axes_map)
+        elif settings.figure.tight_layout:
             fig.tight_layout()
 
         return fig
+
+    def export_legend_only(self, path: str, dpi: int = 300, **save_kwargs):
+        """Export just the outside legend as a separate image file.
+
+        Renders the legend into its own tight figure.
+        """
+        if self._outside_legend is None:
+            return False
+        from matplotlib.figure import Figure as MplFigure
+        fig_leg = MplFigure(dpi=dpi, facecolor="white")
+        # Copy the legend into a new figure by re-rendering
+        # We re-create from collected handles/labels
+        old_leg = self._outside_legend
+        handles = [h for h in old_leg.legend_handles]
+        labels = [t.get_text() for t in old_leg.get_texts()]
+        if not handles:
+            return False
+        ncol = old_leg._ncols if hasattr(old_leg, '_ncols') else 1
+        s = self._settings
+        scale = s.legend_scale
+        base_fs = s.typography.legend_size * scale
+        leg = fig_leg.legend(
+            handles, labels,
+            loc="center",
+            fontsize=base_fs,
+            frameon=True,
+            framealpha=0.9,
+            markerscale=(s.legend.markerscale or 1.0) * scale,
+            handlelength=1.5,
+            ncol=ncol,
+        )
+        # Copy bold styling from original
+        for i, txt in enumerate(old_leg.get_texts()):
+            if i < len(leg.get_texts()):
+                leg.get_texts()[i].set_fontweight(txt.get_fontweight())
+                leg.get_texts()[i].set_fontsize(txt.get_fontsize())
+        fig_leg.savefig(
+            path, dpi=dpi, bbox_inches="tight", pad_inches=0.1,
+            facecolor=save_kwargs.get("facecolor", "white"),
+            transparent=save_kwargs.get("transparent", False),
+        )
+        return True
 
     # ── rcParams ──────────────────────────────────────────────────
 
     def _apply_rcparams(self):
         """Set matplotlib rcParams from settings."""
         s = self._settings
+        tick_weight = "bold" if s.typography.bold_ticks else "normal"
         matplotlib.rcParams.update({
             "font.family": s.typography.font_family,
             "font.size": s.typography.tick_label_size,
             "axes.linewidth": s.spine_linewidth,
             "axes.labelsize": s.typography.axis_label_size,
             "axes.labelweight": s.typography.font_weight,
+            "axes.labelpad": s.typography.label_pad,
             "axes.titlesize": s.typography.title_size,
             "axes.titleweight": s.typography.font_weight,
+            "axes.titlepad": s.typography.title_pad,
             "xtick.labelsize": s.typography.tick_label_size,
             "ytick.labelsize": s.typography.tick_label_size,
             "legend.fontsize": s.typography.legend_size,
         })
+        self._tick_weight = tick_weight
 
     # ── Subplot creation ──────────────────────────────────────────
 
@@ -189,15 +242,21 @@ class MplRenderer:
         while len(col_ratios) < cols:
             col_ratios.append(1.0)
 
-        # Count actual columns (Vs cells need 2: main + sigma)
+        # Count actual columns (Vs cells need 2: main + sigma).
+        # Check ALL rows per column — any vs_profile means the column is wide.
         actual_cols = 0
         col_map = {}  # grid_col -> actual_start_col
+        vs_cols = set()  # logical columns that have at least one vs_profile
         width_ratios = []
         for c in range(cols):
             col_map[c] = actual_cols
-            key = f"cell_0_{c}"
+            is_vs = any(
+                stypes.get(f"cell_{r}_{c}") == "vs_profile"
+                for r in range(rows)
+            )
             r_base = max(col_ratios[c], 0.1)
-            if stypes.get(key) == "vs_profile":
+            if is_vs:
+                vs_cols.add(c)
                 vs_r, sig_r = self._settings.vs_width_ratios
                 width_ratios.extend([r_base * vs_r, r_base * sig_r])
                 actual_cols += 2
@@ -213,6 +272,7 @@ class MplRenderer:
         )
 
         axes = {}
+        vs_pairs = []  # [(vs_key, sig_key), ...] for post-adjustment
         for r in range(rows):
             for c in range(cols):
                 key = f"cell_{r}_{c}"
@@ -223,8 +283,30 @@ class MplRenderer:
                     ax_sig = fig.add_subplot(gs[r, ac + 1], sharey=ax_vs)
                     axes[key] = ax_vs
                     axes[f"{key}_sigma"] = ax_sig
+                    vs_pairs.append((key, f"{key}_sigma"))
+                elif c in vs_cols:
+                    # DC cell in a column that has vs_profile elsewhere — span both
+                    axes[key] = fig.add_subplot(gs[r, ac:ac + 2])
                 else:
                     axes[key] = fig.add_subplot(gs[r, ac])
+
+        # Adjust gap between Vs and sigma subplots using vs_wspace
+        vs_ws = self._settings.vs_wspace
+        for vs_key, sig_key in vs_pairs:
+            ax_vs = axes[vs_key]
+            ax_sig = axes[sig_key]
+            pos_vs = ax_vs.get_position()
+            pos_sig = ax_sig.get_position()
+            # Calculate desired gap in figure fraction
+            total_w = pos_sig.x1 - pos_vs.x0
+            gap_frac = vs_ws * (pos_sig.width + pos_vs.width)
+            # Redistribute: move sigma left edge closer to vs right edge
+            new_sig_x0 = pos_vs.x1 + gap_frac
+            if new_sig_x0 < pos_sig.x1:
+                ax_sig.set_position([
+                    new_sig_x0, pos_sig.y0,
+                    pos_sig.x1 - new_sig_x0, pos_sig.height
+                ])
 
         return axes
 
@@ -498,7 +580,8 @@ class MplRenderer:
         # Configure sigma_ln axis — hide entirely if no sigma data visible
         if ax_sig is not None:
             if any_sigma_visible:
-                self._configure_sigma_axis(ax_sig)
+                sig_key = "sigma_ln" if subplot_key == "vs_profile" else f"{subplot_key}_sigma"
+                self._configure_sigma_axis(ax_sig, sig_key)
             else:
                 ax_sig.set_visible(False)
 
@@ -605,7 +688,7 @@ class MplRenderer:
         # Set Y range
         ax_vs.set_ylim(depth_max, 0)
 
-    def _configure_sigma_axis(self, ax_sig):
+    def _configure_sigma_axis(self, ax_sig, sigma_key: str = "sigma_ln"):
         """Configure the sigma_ln companion axis."""
         s = self._settings
         ax_sig.set_xlabel(
@@ -624,12 +707,17 @@ class MplRenderer:
         ax_sig.xaxis.set_minor_locator(mtick.AutoMinorLocator())
         ax_sig.grid(True, alpha=0.3, linestyle=":", linewidth=0.5)
 
-        # Legend
+        # Legend — use per-subplot settings (only if inside placement)
+        lc = self._settings.legend_for(sigma_key)
         handles, labels = ax_sig.get_legend_handles_labels()
-        if handles and self._settings.legend.show:
+        if handles and lc.show and lc.placement == "inside":
+            scale = self._settings.legend_scale
             ax_sig.legend(
-                loc="upper right",
-                fontsize=max(7, s.typography.legend_size - 1),
+                loc=lc.location,
+                fontsize=(lc.fontsize or max(7, s.typography.legend_size - 1)) * scale,
+                frameon=lc.frame_on,
+                framealpha=lc.frame_alpha,
+                markerscale=(lc.markerscale or 1.0) * scale,
             )
 
     # ── Axis helpers ──────────────────────────────────────────────
@@ -654,6 +742,10 @@ class MplRenderer:
                 ax.xaxis.set_minor_locator(mtick.AutoMinorLocator())
             if ax.get_yscale() != "log":
                 ax.yaxis.set_minor_locator(mtick.AutoMinorLocator())
+        # Bold tick labels
+        tw = getattr(self, '_tick_weight', 'normal')
+        for label in ax.get_xticklabels() + ax.get_yticklabels():
+            label.set_fontweight(tw)
 
     def _configure_grid(self, ax, acfg: AxisConfig):
         """Configure grid lines on an axis."""
@@ -668,12 +760,20 @@ class MplRenderer:
             ax.grid(False)
 
     def _configure_legend(self, ax, subplot_key: str):
-        """Configure legend for a subplot."""
-        lc = self._settings.legend
+        """Configure legend for a subplot using per-subplot settings.
+        
+        For 'inside' placement, adds legend directly to the axes.
+        For 'outside_left'/'outside_right', skips — handled by _create_outside_legend.
+        """
+        lc = self._settings.legend_for(subplot_key)
         if not lc.show:
             legend = ax.get_legend()
             if legend:
                 legend.remove()
+            return
+
+        # Outside legends are handled at figure level
+        if lc.placement != "inside":
             return
 
         handles, labels = ax.get_legend_handles_labels()
@@ -686,7 +786,8 @@ class MplRenderer:
         if not handles:
             return
 
-        fontsize = lc.fontsize or self._settings.typography.legend_size
+        scale = self._settings.legend_scale
+        fontsize = (lc.fontsize or self._settings.typography.legend_size) * scale
 
         kwargs = dict(
             fontsize=fontsize,
@@ -694,19 +795,158 @@ class MplRenderer:
             framealpha=lc.frame_alpha,
             shadow=lc.shadow,
             ncol=lc.ncol,
+            markerscale=lc.markerscale * scale,
         )
         if lc.title:
             kwargs["title"] = lc.title
 
-        if lc.outside:
-            # Place legend outside to the right of the plot
-            kwargs["loc"] = "upper left"
-            kwargs["bbox_to_anchor"] = (1.02, 1.0)
-            kwargs["borderaxespad"] = 0.0
-        else:
-            kwargs["loc"] = lc.location
-
+        kwargs["loc"] = lc.location
         ax.legend(handles, labels, **kwargs)
+
+    def _create_outside_legend(self, fig, axes_map: Dict[str, object]):
+        """Create a combined figure-level legend for all subplots with outside placement.
+
+        Supports outside_left, outside_right, outside_top, outside_bottom.
+        Top/bottom legends use horizontal layout (ncol=auto).
+        Returns the legend object for potential separate export.
+        """
+        s = self._settings
+        st = self._state
+
+        # Collect subplot groups that want outside legends
+        groups = []  # [(subplot_name, placement, handles, labels)]
+        placement_side = None
+
+        for key, ax in axes_map.items():
+            if key.endswith("_sigma") or key == "sigma_ln":
+                continue
+            lc = s.legend_for(key)
+            if not lc.show or lc.placement == "inside":
+                continue
+
+            if placement_side is None:
+                placement_side = lc.placement
+
+            handles, labels = ax.get_legend_handles_labels()
+            extra = getattr(ax, "legend_handles", [])
+            if extra:
+                handles = handles + extra
+                labels = labels + [h.get_label() for h in extra]
+
+            # Also collect sigma subplot legend entries
+            sig_key = "sigma_ln" if key == "vs_profile" else f"{key}_sigma"
+            sig_ax = axes_map.get(sig_key)
+            if sig_ax is not None:
+                sh, sl = sig_ax.get_legend_handles_labels()
+                if sh:
+                    handles = handles + sh
+                    labels = labels + sl
+
+            if handles:
+                name = st.subplot_names.get(key, key)
+                groups.append((name, handles, labels))
+
+        if not groups:
+            return None
+
+        # Build combined handle/label list with group headers
+        combined_handles = []
+        combined_labels = []
+        scale = s.legend_scale
+        base_fs = s.typography.legend_size * scale
+
+        for i, (name, handles, labels) in enumerate(groups):
+            if len(groups) > 1:
+                if i > 0:
+                    combined_handles.append(
+                        mpatches.Patch(facecolor="none", edgecolor="none")
+                    )
+                    combined_labels.append("_nolegend_separator")
+                combined_handles.append(
+                    mpatches.Patch(facecolor="none", edgecolor="none")
+                )
+                combined_labels.append(name)
+
+            combined_handles.extend(handles)
+            combined_labels.extend(labels)
+
+        if not combined_handles:
+            return None
+
+        # Use first outside subplot's legend config for frame settings
+        first_key = None
+        for key in axes_map:
+            if not key.endswith("_sigma") and key != "sigma_ln":
+                lc = s.legend_for(key)
+                if lc.placement != "inside":
+                    first_key = key
+                    break
+        lc = s.legend_for(first_key) if first_key else s.legend
+
+        # Determine position based on placement side
+        is_horizontal = placement_side in ("outside_top", "outside_bottom")
+        n_data_items = sum(len(h) for _, h, _ in groups)
+        ncol = min(n_data_items, 6) if is_horizontal else 1
+
+        if placement_side == "outside_left":
+            loc, anchor, margin_key = "center left", (-0.02, 0.5), "left"
+        elif placement_side == "outside_right":
+            loc, anchor, margin_key = "center right", (1.02, 0.5), "right"
+        elif placement_side == "outside_top":
+            loc, anchor, margin_key = "lower center", (0.5, 1.02), "top"
+        else:  # outside_bottom
+            loc, anchor, margin_key = "upper center", (0.5, -0.02), "bottom"
+
+        legend = fig.legend(
+            combined_handles, combined_labels,
+            loc=loc,
+            bbox_to_anchor=anchor,
+            fontsize=base_fs,
+            frameon=lc.frame_on,
+            framealpha=lc.frame_alpha,
+            shadow=lc.shadow,
+            markerscale=(lc.markerscale or 1.0) * scale,
+            borderaxespad=0.3,
+            handlelength=1.5,
+            ncol=ncol,
+        )
+
+        # Style header entries: bold text, no visible marker
+        if len(groups) > 1 and legend:
+            idx = 0
+            for i, (name, handles, labels) in enumerate(groups):
+                if i > 0:
+                    if idx < len(legend.get_texts()):
+                        legend.get_texts()[idx].set_fontsize(base_fs * 0.3)
+                    idx += 1
+                if idx < len(legend.get_texts()):
+                    legend.get_texts()[idx].set_fontweight("bold")
+                    legend.get_texts()[idx].set_fontsize(base_fs * 1.05)
+                idx += 1
+                idx += len(handles)
+
+        # Allocate extra margin space for the legend
+        fc = s.figure
+        w = max(fc.width, 0.1)
+        h = max(fc.height, 0.1)
+        if margin_key == "right":
+            legend_frac = 0.18
+            current_right = 1.0 - fc.margin_right / w
+            fig.subplots_adjust(right=current_right - legend_frac)
+        elif margin_key == "left":
+            legend_frac = 0.18
+            current_left = fc.margin_left / w
+            fig.subplots_adjust(left=current_left + legend_frac)
+        elif margin_key == "top":
+            legend_frac = 0.12
+            current_top = 1.0 - fc.margin_top / h
+            fig.subplots_adjust(top=current_top - legend_frac)
+        else:  # bottom
+            legend_frac = 0.12
+            current_bottom = fc.margin_bottom / h
+            fig.subplots_adjust(bottom=current_bottom + legend_frac)
+
+        return legend
 
     # ── Post-processing ───────────────────────────────────────────
 

@@ -307,36 +307,174 @@ class EnsembleHandlersMixin:
         self.curve_tree.add_vs_profile(prof)
 
         # Save CSV to project dir
-        self._save_profile_csv(prof)
+        units = params.get("units", "m")
+        self._save_profile_csv(prof, units=units)
 
         vs30_str = f"Vs30={prof.vs30_mean:.1f} m/s" if prof.vs30_mean else ""
         self.log_panel.log_success(
             f"{ptype_label} Profile: {len(profiles)} models extracted. {vs30_str}"
         )
 
-    def _save_profile_csv(self, prof):
-        """Save profile statistics CSV to project/theoretical/ dir."""
+    def _save_profile_csv(self, prof, units="m"):
+        """Save comprehensive Vs profile outputs to project/Vs/ dir.
+
+        Generates the same files as the old vs_profile_analysis package:
+        - Paired-format median CSV
+        - Layer table CSV
+        - Multi-sheet Excel results file with formatted headers
+        """
         from pathlib import Path
+        import numpy as np
+        import pandas as pd
+
         project_dir = getattr(self, '_project_dir', None)
         if project_dir is None or prof.depth_grid is None:
             return
-        theo_dir = Path(project_dir) / "theoretical"
-        theo_dir.mkdir(parents=True, exist_ok=True)
+
+        vs_dir = Path(project_dir) / "Vs"
+        vs_dir.mkdir(parents=True, exist_ok=True)
         name = prof.display_name.replace(" ", "_").replace("/", "_")
-        header = "Depth_m,Median,P_low,P_high,Sigma_ln"
-        lines = [header]
-        for i in range(len(prof.depth_grid)):
-            row = (
-                f"{prof.depth_grid[i]:.3f},"
-                f"{prof.median[i]:.4f},"
-                f"{prof.p_low[i]:.4f},"
-                f"{prof.p_high[i]:.4f},"
-                f"{prof.sigma_ln[i]:.6f}"
-            )
-            lines.append(row)
-        fpath = theo_dir / f"{name}_stats.csv"
-        fpath.write_text("\n".join(lines), encoding="utf-8")
-        self.log_panel.log_info(f"Saved: {fpath.name}")
+
+        conv = 3.28084 if units == "ft" else 1.0
+        d_unit = "ft" if units == "ft" else "m"
+        v_unit = "ft/s" if units == "ft" else "m/s"
+
+        # ── 1. Paired-format median CSV ──
+        if prof.median_depth_paired is not None and prof.median_vel_paired is not None:
+            df_med = pd.DataFrame({
+                f"Depth({d_unit})": np.asarray(prof.median_depth_paired) * conv,
+                f"Vs({v_unit})": np.asarray(prof.median_vel_paired) * conv,
+            })
+            fpath = vs_dir / f"{name}_median.csv"
+            df_med.to_csv(fpath, index=False, float_format="%.4f")
+            self.log_panel.log_info(f"Saved: {fpath.name}")
+
+        # ── 2. Layer table from paired median ──
+        if prof.median_depth_paired is not None and prof.median_vel_paired is not None:
+            try:
+                depth_p = np.asarray(prof.median_depth_paired)
+                vel_p = np.asarray(prof.median_vel_paired)
+                layers = []
+                for i in range(0, len(depth_p) - 1, 2):
+                    if i < len(depth_p) - 1:
+                        top = (depth_p[i - 1] if i > 0 else 0.0) * conv
+                        bot = depth_p[i + 1] * conv
+                        vs = vel_p[i + 1] * conv
+                        layers.append({
+                            "Layer": i // 2 + 1,
+                            f"Top Depth ({d_unit})": round(top, 2),
+                            f"Bottom Depth ({d_unit})": round(bot, 2),
+                            f"Thickness ({d_unit})": round(bot - top, 2),
+                            f"Median Vs ({v_unit})": round(vs, 1),
+                        })
+                if layers:
+                    df_layer = pd.DataFrame(layers)
+                    fpath = vs_dir / f"{name}_layer_table.csv"
+                    df_layer.to_csv(fpath, index=False, float_format="%.1f")
+                    self.log_panel.log_info(f"Saved: {fpath.name}")
+            except Exception:
+                pass
+
+        # ── 3. Multi-sheet Excel results ──
+        vsn_label = "Vs100" if units == "ft" else "Vs30"
+        vsn_arr = prof.vs100_values if units == "ft" else prof.vs30_values
+        vsn_unit = "ft/s" if units == "ft" else "m/s"
+
+        excel_path = vs_dir / f"{name}_results.xlsx"
+        try:
+            with pd.ExcelWriter(excel_path, engine="xlsxwriter") as writer:
+                # Sheet 1: Median Profile (on depth grid)
+                df_median = pd.DataFrame({
+                    f"Depth({d_unit})": prof.depth_grid * conv,
+                    f"Median Vs({v_unit})": prof.median * conv,
+                })
+                df_median.to_excel(writer, sheet_name="Median_Profile", index=False)
+
+                # Sheet 2: Percentiles
+                df_pct = pd.DataFrame({
+                    f"Depth({d_unit})": prof.depth_grid * conv,
+                    f"Vs5({v_unit})": prof.p_low * conv,
+                    f"Vs50({v_unit})": prof.median * conv,
+                    f"Vs95({v_unit})": prof.p_high * conv,
+                    "Sigma_ln": prof.sigma_ln,
+                })
+                df_pct.to_excel(writer, sheet_name="Percentiles", index=False)
+
+                # Sheet 3: Summary
+                summary_rows = {
+                    "Parameter": [
+                        "Number of Profiles",
+                        f"Mean {vsn_label}",
+                        f"Median {vsn_label}",
+                        f"Std {vsn_label}",
+                        f"{vsn_label} p5",
+                        f"{vsn_label} p95",
+                    ],
+                    "Value": [],
+                    "Units": [
+                        "count", vsn_unit, vsn_unit,
+                        vsn_unit, vsn_unit, vsn_unit,
+                    ],
+                }
+                if vsn_arr is not None and len(vsn_arr) > 0:
+                    valid = vsn_arr[np.isfinite(vsn_arr)]
+                    nv = len(valid)
+                    summary_rows["Value"] = [
+                        str(len(vsn_arr)),
+                        f"{np.mean(valid):.1f}" if nv else "N/A",
+                        f"{np.median(valid):.1f}" if nv else "N/A",
+                        f"{np.std(valid):.1f}" if nv else "N/A",
+                        f"{np.percentile(valid, 5):.1f}" if nv else "N/A",
+                        f"{np.percentile(valid, 95):.1f}" if nv else "N/A",
+                    ]
+                else:
+                    summary_rows["Value"] = ["0"] + ["N/A"] * 5
+                df_summary = pd.DataFrame(summary_rows)
+                df_summary.to_excel(writer, sheet_name="Summary", index=False)
+
+                # Sheet 4: Individual VsN values
+                if vsn_arr is not None and len(vsn_arr) > 0:
+                    df_vsn = pd.DataFrame({
+                        "Profile": range(1, len(vsn_arr) + 1),
+                        f"{vsn_label}({vsn_unit})": vsn_arr,
+                    })
+                    df_vsn.to_excel(writer, sheet_name="Vs_Values", index=False)
+
+                # Format headers with bold green background
+                workbook = writer.book
+                hdr_fmt = workbook.add_format({
+                    "bold": True,
+                    "bg_color": "#D7E4BC",
+                    "border": 1,
+                })
+                for sname in writer.sheets:
+                    ws = writer.sheets[sname]
+                    # Re-write header row with format
+                    df_for_sheet = {
+                        "Median_Profile": df_median,
+                        "Percentiles": df_pct,
+                        "Summary": df_summary,
+                    }
+                    if "Vs_Values" in writer.sheets and vsn_arr is not None:
+                        df_for_sheet["Vs_Values"] = df_vsn
+                    df_src = df_for_sheet.get(sname)
+                    if df_src is not None:
+                        for col_num, col_name in enumerate(df_src.columns):
+                            ws.write(0, col_num, col_name, hdr_fmt)
+
+            self.log_panel.log_info(f"Saved: {excel_path.name}")
+        except Exception as exc:
+            # Fallback: save the stats as plain CSV
+            df_stats = pd.DataFrame({
+                f"Depth({d_unit})": prof.depth_grid * conv,
+                f"Vs5({v_unit})": prof.p_low * conv,
+                f"Vs50({v_unit})": prof.median * conv,
+                f"Vs95({v_unit})": prof.p_high * conv,
+                "Sigma_ln": prof.sigma_ln,
+            })
+            fpath = vs_dir / f"{name}_stats.csv"
+            df_stats.to_csv(fpath, index=False, float_format="%.6f")
+            self.log_panel.log_info(f"Saved: {fpath.name} (Excel failed: {exc})")
 
     def _on_vs_profile_layer_toggled(self, uid: str, layer_name: str, visible: bool):
         """Toggle visibility of a Vs profile layer."""

@@ -108,6 +108,7 @@ class PlotCanvas(QWidget):
         self._grid_rows = 1
         self._grid_cols = 1
         self._grid_col_ratios: List[float] = []
+        self._vs_internal_ratios = (3.0, 1.0)  # (vs_width, sigma_width) for canvas
         self._link_y = False
         self._link_x = False
         self._plots: Dict[str, pg.PlotItem] = {}  # key -> PlotItem
@@ -193,11 +194,12 @@ class PlotCanvas(QWidget):
                         self._plots[sig_key] = p_sig
                         self._configure_sigma_plot(p_sig, sig_key)
                         p_sig.setYLink(p)
-                        # Split ratio 3:1 within this column, scaled by col_ratio
+                        # Split ratio using Vs internal ratios, scaled by col_ratio
+                        vs_r, sig_r = self._vs_internal_ratios
                         self.graphics_layout.ci.layout.setColumnStretchFactor(
-                            col_offset, round(col_ratio * 300))
+                            col_offset, round(col_ratio * vs_r * 100))
                         self.graphics_layout.ci.layout.setColumnStretchFactor(
-                            col_offset + 1, round(col_ratio * 100))
+                            col_offset + 1, round(col_ratio * sig_r * 100))
                         col_offset += 2
 
                         if first_vs is None:
@@ -241,8 +243,9 @@ class PlotCanvas(QWidget):
             self._configure_sigma_plot(p_sig, 'sigma_ln')
 
             p_sig.setYLink(p_vs)
-            self.graphics_layout.ci.layout.setColumnStretchFactor(0, 3)
-            self.graphics_layout.ci.layout.setColumnStretchFactor(1, 1)
+            vs_r, sig_r = self._vs_internal_ratios
+            self.graphics_layout.ci.layout.setColumnStretchFactor(0, round(vs_r * 100))
+            self.graphics_layout.ci.layout.setColumnStretchFactor(1, round(sig_r * 100))
         else:
             # Single combined plot
             name = self._subplot_names.get('main', '')
@@ -472,6 +475,11 @@ class PlotCanvas(QWidget):
     def set_grid_col_ratios(self, ratios: list):
         """Set per-column width ratios and rebuild."""
         self._grid_col_ratios = list(ratios)
+        self.rebuild()
+
+    def set_vs_internal_ratios(self, vs_ratio: float, sig_ratio: float):
+        """Set the internal Vs:Sigma width split and rebuild."""
+        self._vs_internal_ratios = (vs_ratio, sig_ratio)
         self.rebuild()
 
     def set_subplot_type(self, key: str, stype: str):

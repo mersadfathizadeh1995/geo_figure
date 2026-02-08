@@ -115,6 +115,8 @@ class StudioWindow(QMainWindow):
         self._canvas_scroll.setWidget(self._canvas)
         self._canvas_scroll.setWidgetResizable(False)
         self._canvas_scroll.setAlignment(Qt.AlignCenter)
+        self._canvas_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._canvas_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 
         canvas_layout.addWidget(self._toolbar)
         canvas_layout.addWidget(self._canvas_scroll, stretch=1)
@@ -122,8 +124,8 @@ class StudioWindow(QMainWindow):
 
         # -- Right: settings tabs (scrollable) --
         self._tabs = QTabWidget()
-        self._tabs.setMinimumWidth(270)
-        self._tabs.setMaximumWidth(360)
+        self._tabs.setMinimumWidth(300)
+        self._tabs.setMaximumWidth(500)
 
         self._figure_panel = FigurePanel()
         self._typography_panel = TypographyPanel()
@@ -151,7 +153,7 @@ class StudioWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([210, 780, 310])
+        splitter.setSizes([210, 700, 390])
 
         main_layout.addWidget(splitter)
 
@@ -237,11 +239,14 @@ class StudioWindow(QMainWindow):
                 subplot_info, list(self._state.grid_col_ratios)
             )
         else:
-            self._figure_panel._ratio_grp.setVisible(False)
+            self._figure_panel._ratio_sec.setVisible(False)
 
         # Populate axis panel with subplot info and canvas ranges
         self._axis_panel.set_subplots(subplot_info, self._settings)
         self._axis_panel.set_canvas_ranges(self._canvas_ranges)
+
+        # Populate legend panel with subplot info
+        self._legend_panel.set_subplots(subplot_info, self._settings)
 
     def _get_subplot_info(self) -> list:
         """Return [(key, display_name), ...] for all subplots."""
@@ -272,6 +277,8 @@ class StudioWindow(QMainWindow):
                 acfg.invert_y = True
                 acfg.x_scale = "linear"
                 acfg.y_scale = "linear"
+                acfg.auto_x = False
+                acfg.auto_y = False
             else:
                 acfg.x_scale = "log"
 
@@ -332,19 +339,14 @@ class StudioWindow(QMainWindow):
         self._figure_panel.write_ratios_to(self._state)
         self._typography_panel.write_to(self._settings.typography)
         self._axis_panel.sync_all()
-        self._legend_panel.write_to(self._settings.legend)
+        self._legend_panel.sync_all()
 
     # ── Presets ────────────────────────────────────────────────────
 
     def _apply_preset(self, name: str):
-        """Apply a named preset and update all panels."""
+        """Apply a named preset — only updates typography (fonts/sizes)."""
         apply_preset(self._settings, name)
-        self._figure_panel.read_from(self._settings.figure)
         self._typography_panel.read_from(self._settings.typography)
-        self._legend_panel.read_from(self._settings.legend)
-        self._auto_configure_axes()
-        subplot_info = self._get_subplot_info()
-        self._axis_panel.set_subplots(subplot_info, self._settings)
         self._schedule_render()
         self._status.showMessage(f"Applied preset: {get_preset_label(name)}", 3000)
 
@@ -397,7 +399,20 @@ class StudioWindow(QMainWindow):
                 pad_inches=options.get("pad_inches", 0.1),
                 facecolor=options.get("facecolor", "white"),
             )
-            self._export_panel.set_status(f"Exported: {os.path.basename(path)}")
+            msgs = [f"Exported: {os.path.basename(path)}"]
+
+            # Export legend separately if requested
+            if options.get("legend_separate"):
+                base, ext = os.path.splitext(path)
+                leg_path = f"{base}_legend{ext}"
+                if self._renderer.export_legend_only(
+                    leg_path, dpi=export_dpi,
+                    facecolor=options.get("facecolor", "white"),
+                    transparent=options.get("transparent", False),
+                ):
+                    msgs.append(f"Legend: {os.path.basename(leg_path)}")
+
+            self._export_panel.set_status(" | ".join(msgs))
             self._status.showMessage(f"Exported to {path}", 5000)
         except Exception as e:
             self._export_panel.set_status(f"Error: {e}")

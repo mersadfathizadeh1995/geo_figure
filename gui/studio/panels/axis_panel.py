@@ -2,9 +2,11 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QDoubleSpinBox, QComboBox,
     QCheckBox, QLabel, QGroupBox, QHBoxLayout, QLineEdit, QPushButton,
+    QScrollArea,
 )
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Qt
 from geo_figure.gui.studio.models import AxisConfig, GridConfig, TickConfig
+from geo_figure.gui.studio.panels import CollapsibleSection
 
 
 class AxisPanel(QWidget):
@@ -15,9 +17,19 @@ class AxisPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
+        self.setMinimumWidth(280)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
         layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(6)
+        layout.setSpacing(4)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
 
         # -- Subplot selector --
         sel_grp = QGroupBox("Subplot")
@@ -27,9 +39,10 @@ class AxisPanel(QWidget):
         sel_form.addRow("Subplot:", self.subplot_combo)
         layout.addWidget(sel_grp)
 
-        # -- Limits group --
-        limits_grp = QGroupBox("Axis Limits")
-        limits_form = QFormLayout(limits_grp)
+        # -- Limits --
+        limits_sec = CollapsibleSection("Axis Limits")
+        limits_form = QFormLayout(limits_sec.content)
+        limits_form.setContentsMargins(8, 2, 4, 2)
         limits_form.setSpacing(4)
 
         self.auto_x = QCheckBox("Auto X")
@@ -64,11 +77,12 @@ class AxisPanel(QWidget):
         row_y.addWidget(self.y_max)
         limits_form.addRow(row_y)
 
-        layout.addWidget(limits_grp)
+        layout.addWidget(limits_sec)
 
-        # -- Labels group --
-        labels_grp = QGroupBox("Labels")
-        labels_form = QFormLayout(labels_grp)
+        # -- Labels --
+        labels_sec = CollapsibleSection("Labels")
+        labels_form = QFormLayout(labels_sec.content)
+        labels_form.setContentsMargins(8, 2, 4, 2)
         labels_form.setSpacing(4)
 
         self.show_x_label = QCheckBox("Show X Axis Label")
@@ -97,11 +111,12 @@ class AxisPanel(QWidget):
             self._freq_custom_label.setVisible(False)
         self.freq_tick_combo.currentIndexChanged.connect(self._on_freq_mode)
 
-        layout.addWidget(labels_grp)
+        layout.addWidget(labels_sec)
 
-        # -- Scale group --
-        scale_grp = QGroupBox("Scale")
-        scale_form = QFormLayout(scale_grp)
+        # -- Scale --
+        scale_sec = CollapsibleSection("Scale")
+        scale_form = QFormLayout(scale_sec.content)
+        scale_form.setContentsMargins(8, 2, 4, 2)
         scale_form.setSpacing(4)
 
         self.x_scale = QComboBox()
@@ -115,11 +130,12 @@ class AxisPanel(QWidget):
         self.invert_y = QCheckBox("Invert Y (depth)")
         scale_form.addRow(self.invert_y)
 
-        layout.addWidget(scale_grp)
+        layout.addWidget(scale_sec)
 
-        # -- Ticks group --
-        tick_grp = QGroupBox("Ticks")
-        tick_form = QFormLayout(tick_grp)
+        # -- Ticks --
+        tick_sec = CollapsibleSection("Ticks")
+        tick_form = QFormLayout(tick_sec.content)
+        tick_form.setContentsMargins(8, 2, 4, 2)
         tick_form.setSpacing(4)
 
         self.tick_dir = QComboBox()
@@ -138,11 +154,12 @@ class AxisPanel(QWidget):
         ticks_row.addWidget(self.show_minor)
         tick_form.addRow(ticks_row)
 
-        layout.addWidget(tick_grp)
+        layout.addWidget(tick_sec)
 
-        # -- Grid group --
-        grid_grp = QGroupBox("Grid")
-        grid_form = QFormLayout(grid_grp)
+        # -- Grid --
+        grid_sec = CollapsibleSection("Grid")
+        grid_form = QFormLayout(grid_sec.content)
+        grid_form.setContentsMargins(8, 2, 4, 2)
         grid_form.setSpacing(4)
 
         self.grid_show = QCheckBox("Show Grid")
@@ -163,11 +180,12 @@ class AxisPanel(QWidget):
         self.grid_alpha.setSingleStep(0.05)
         grid_form.addRow("Opacity:", self.grid_alpha)
 
-        layout.addWidget(grid_grp)
+        layout.addWidget(grid_sec)
 
-        # -- Axis Linking group --
-        link_grp = QGroupBox("Axis Linking")
-        link_form = QFormLayout(link_grp)
+        # -- Axis Linking --
+        link_sec = CollapsibleSection("Axis Linking", expanded=False)
+        link_form = QFormLayout(link_sec.content)
+        link_form.setContentsMargins(8, 2, 4, 2)
         link_form.setSpacing(4)
 
         self.link_x_combo = QComboBox()
@@ -178,7 +196,7 @@ class AxisPanel(QWidget):
         self.link_y_combo.addItem("(None)", "")
         link_form.addRow("Link Y to:", self.link_y_combo)
 
-        layout.addWidget(link_grp)
+        layout.addWidget(link_sec)
         layout.addStretch()
 
         # Connect signals

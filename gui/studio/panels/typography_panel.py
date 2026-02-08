@@ -2,10 +2,12 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QDoubleSpinBox, QComboBox,
     QCheckBox, QLabel, QGroupBox, QHBoxLayout, QPushButton,
+    QScrollArea,
 )
 from PySide6.QtCore import Signal
 
 from geo_figure.gui.studio.presets import get_preset_names, get_preset_label
+from geo_figure.gui.studio.panels import CollapsibleSection
 
 # Font families commonly available across platforms
 FONT_FAMILIES = [
@@ -23,13 +25,23 @@ class TypographyPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
 
-        # -- Font group --
-        font_grp = QGroupBox("Font")
-        font_form = QFormLayout(font_grp)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(scroll.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
+        scroll.setWidget(content)
+        outer.addWidget(scroll)
+
+        # -- Font --
+        font_sec = CollapsibleSection("Font")
+        font_form = QFormLayout(font_sec.content)
+        font_form.setContentsMargins(8, 2, 4, 2)
         font_form.setSpacing(4)
 
         self.family_combo = QComboBox()
@@ -40,11 +52,12 @@ class TypographyPanel(QWidget):
         self.bold_check = QCheckBox("Bold")
         font_form.addRow("Weight:", self.bold_check)
 
-        layout.addWidget(font_grp)
+        layout.addWidget(font_sec)
 
-        # -- Sizes group --
-        sizes_grp = QGroupBox("Font Sizes (pt)")
-        sizes_form = QFormLayout(sizes_grp)
+        # -- Sizes --
+        sizes_sec = CollapsibleSection("Font Sizes (pt)")
+        sizes_form = QFormLayout(sizes_sec.content)
+        sizes_form.setContentsMargins(8, 2, 4, 2)
         sizes_form.setSpacing(4)
 
         self.title_size = self._size_spin(14.0)
@@ -58,11 +71,37 @@ class TypographyPanel(QWidget):
         self.annotation_size = self._size_spin(9.0)
         sizes_form.addRow("Annotations:", self.annotation_size)
 
-        layout.addWidget(sizes_grp)
+        layout.addWidget(sizes_sec)
 
-        # -- Presets group --
-        presets_grp = QGroupBox("Presets")
-        presets_layout = QVBoxLayout(presets_grp)
+        # -- Spacing --
+        spacing_sec = CollapsibleSection("Spacing")
+        spacing_form = QFormLayout(spacing_sec.content)
+        spacing_form.setContentsMargins(8, 2, 4, 2)
+        spacing_form.setSpacing(4)
+
+        self.title_pad = QDoubleSpinBox()
+        self.title_pad.setRange(0.0, 30.0)
+        self.title_pad.setValue(6.0)
+        self.title_pad.setSingleStep(1.0)
+        self.title_pad.setSuffix(" pt")
+        spacing_form.addRow("Title Padding:", self.title_pad)
+
+        self.label_pad = QDoubleSpinBox()
+        self.label_pad.setRange(0.0, 20.0)
+        self.label_pad.setValue(4.0)
+        self.label_pad.setSingleStep(1.0)
+        self.label_pad.setSuffix(" pt")
+        spacing_form.addRow("Label Padding:", self.label_pad)
+
+        self.bold_ticks = QCheckBox("Bold Tick Labels")
+        spacing_form.addRow(self.bold_ticks)
+
+        layout.addWidget(spacing_sec)
+
+        # -- Presets --
+        presets_sec = CollapsibleSection("Presets")
+        presets_layout = QVBoxLayout(presets_sec.content)
+        presets_layout.setContentsMargins(8, 2, 4, 2)
         presets_layout.setSpacing(4)
 
         btn_row = QHBoxLayout()
@@ -73,14 +112,16 @@ class TypographyPanel(QWidget):
             btn_row.addWidget(btn)
         presets_layout.addLayout(btn_row)
 
-        layout.addWidget(presets_grp)
+        layout.addWidget(presets_sec)
         layout.addStretch()
 
         # Connect signals
         self.family_combo.currentTextChanged.connect(self.changed)
         self.bold_check.stateChanged.connect(self.changed)
+        self.bold_ticks.stateChanged.connect(self.changed)
         for w in (self.title_size, self.label_size, self.tick_size,
-                  self.legend_size, self.annotation_size):
+                  self.legend_size, self.annotation_size,
+                  self.title_pad, self.label_pad):
             w.valueChanged.connect(self.changed)
 
     def _size_spin(self, default: float) -> QDoubleSpinBox:
@@ -100,6 +141,9 @@ class TypographyPanel(QWidget):
         cfg.tick_label_size = self.tick_size.value()
         cfg.legend_size = self.legend_size.value()
         cfg.annotation_size = self.annotation_size.value()
+        cfg.title_pad = self.title_pad.value()
+        cfg.label_pad = self.label_pad.value()
+        cfg.bold_ticks = self.bold_ticks.isChecked()
 
     def read_from(self, cfg):
         """Populate controls from a TypographyConfig."""
@@ -115,4 +159,7 @@ class TypographyPanel(QWidget):
         self.tick_size.setValue(cfg.tick_label_size)
         self.legend_size.setValue(cfg.legend_size)
         self.annotation_size.setValue(cfg.annotation_size)
+        self.title_pad.setValue(cfg.title_pad)
+        self.label_pad.setValue(cfg.label_pad)
+        self.bold_ticks.setChecked(cfg.bold_ticks)
         self.blockSignals(False)
