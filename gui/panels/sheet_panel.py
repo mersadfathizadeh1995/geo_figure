@@ -45,7 +45,7 @@ class SheetPanel(QWidget):
     sheet_name_changed = Signal(str)       # new name
     legend_changed = Signal(dict)          # full legend config
     col_ratios_changed = Signal(list)      # per-column width ratios
-    vs_ratio_changed = Signal(float)       # vs:sigma ratio (e.g. 3.0 = 3:1)
+    vs_ratio_changed = Signal(float, float)  # (vs_width, sigma_width) fractions
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -139,16 +139,28 @@ class SheetPanel(QWidget):
 
         # -- Vs Profile Layout (shown when a Vs cell exists) --
         self._vs_sec = _CollapsibleSection("Vs Profile Layout", expanded=True)
-        self.vs_sigma_ratio_spin = QDoubleSpinBox()
-        self.vs_sigma_ratio_spin.setRange(1.0, 10.0)
-        self.vs_sigma_ratio_spin.setSingleStep(0.5)
-        self.vs_sigma_ratio_spin.setDecimals(1)
-        self.vs_sigma_ratio_spin.setValue(3.0)
-        self.vs_sigma_ratio_spin.setToolTip(
-            "Vs plot width relative to Sigma plot width (e.g. 3.0 = Vs is 3x wider)"
+
+        self.vs_width_spin = QDoubleSpinBox()
+        self.vs_width_spin.setRange(0.1, 1.0)
+        self.vs_width_spin.setSingleStep(0.05)
+        self.vs_width_spin.setDecimals(2)
+        self.vs_width_spin.setValue(0.75)
+        self.vs_width_spin.setToolTip(
+            "Vs plot share of the column width (0-1)"
         )
-        self.vs_sigma_ratio_spin.valueChanged.connect(self._on_vs_ratio_changed)
-        self._vs_sec.form.addRow("Vs / Sigma:", self.vs_sigma_ratio_spin)
+        self.vs_width_spin.valueChanged.connect(self._on_vs_width_changed)
+        self._vs_sec.form.addRow("Vs Width:", self.vs_width_spin)
+
+        self.sigma_width_spin = QDoubleSpinBox()
+        self.sigma_width_spin.setRange(0.05, 0.9)
+        self.sigma_width_spin.setSingleStep(0.05)
+        self.sigma_width_spin.setDecimals(2)
+        self.sigma_width_spin.setValue(0.25)
+        self.sigma_width_spin.setToolTip(
+            "Sigma plot share of the column width (0-1)"
+        )
+        self.sigma_width_spin.valueChanged.connect(self._on_vs_width_changed)
+        self._vs_sec.form.addRow("Sigma Width:", self.sigma_width_spin)
 
         self._vs_sec.setVisible(False)
         layout.addWidget(self._vs_sec)
@@ -279,13 +291,15 @@ class SheetPanel(QWidget):
         self._vs_sec.setVisible(visible)
 
     def set_vs_ratios(self, vs_ratio: float, sig_ratio: float):
-        """Populate Vs/sigma ratio spinbox from (vs, sig) tuple."""
+        """Populate Vs/sigma width spinboxes from stored tuple."""
         self._updating = True
-        ratio = vs_ratio / max(sig_ratio, 0.1)
-        self.vs_sigma_ratio_spin.setValue(ratio)
+        self.vs_width_spin.setValue(vs_ratio)
+        self.sigma_width_spin.setValue(sig_ratio)
         self._updating = False
 
-    def _on_vs_ratio_changed(self):
+    def _on_vs_width_changed(self):
         if self._updating:
             return
-        self.vs_ratio_changed.emit(self.vs_sigma_ratio_spin.value())
+        self.vs_ratio_changed.emit(
+            self.vs_width_spin.value(), self.sigma_width_spin.value()
+        )

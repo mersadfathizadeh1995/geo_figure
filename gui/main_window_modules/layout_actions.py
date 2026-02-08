@@ -92,7 +92,7 @@ class LayoutActionsMixin:
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.set_grid_col_ratios(ratios)
 
-    def _on_vs_ratio_changed(self, ratio: float):
-        """Apply Vs/Sigma ratio to the current canvas."""
+    def _on_vs_ratio_changed(self, vs_width: float, sig_width: float):
+        """Apply Vs/Sigma width fractions to the current canvas."""
         canvas = self.sheet_tabs.get_current_canvas()
-        canvas.set_vs_internal_ratios(ratio, 1.0)
+        canvas.set_vs_internal_ratios(vs_width, sig_width)
