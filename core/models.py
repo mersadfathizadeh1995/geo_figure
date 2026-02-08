@@ -209,6 +209,95 @@ CURVE_COLORS = [
 
 
 @dataclass
+class VsProfileData:
+    """Vs (or Vp/Rho) depth-velocity profile ensemble with statistics."""
+    uid: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    name: str = "Vs Profile"
+    custom_name: str = ""
+    profile_type: str = "vs"  # "vs", "vp", "rho"
+    n_profiles: int = 0
+    subplot_key: str = "main"
+
+    # Paired-format individual profiles: list of (depth, velocity) tuples
+    profiles: Optional[List] = None  # List[Tuple[ndarray, ndarray]]
+
+    # Statistics on uniform depth grid
+    depth_grid: Optional[np.ndarray] = None
+    median: Optional[np.ndarray] = None
+    p_low: Optional[np.ndarray] = None     # e.g. 5th percentile
+    p_high: Optional[np.ndarray] = None    # e.g. 95th percentile
+    sigma_ln: Optional[np.ndarray] = None
+
+    # Layered median (paired format from raw profiles)
+    median_depth_paired: Optional[np.ndarray] = None
+    median_vel_paired: Optional[np.ndarray] = None
+
+    # Vs30 / Vs100 arrays (one per profile)
+    vs30_values: Optional[np.ndarray] = None  # m/s
+    vs100_values: Optional[np.ndarray] = None  # ft/s
+
+    # Layer display settings
+    median_layer: EnsembleLayer = field(
+        default_factory=lambda: EnsembleLayer(
+            visible=True, color="#000000", alpha=255, line_width=2.5
+        )
+    )
+    percentile_layer: EnsembleLayer = field(
+        default_factory=lambda: EnsembleLayer(
+            visible=True, color="#2196F3", alpha=50, line_width=1.0
+        )
+    )
+    individual_layer: EnsembleLayer = field(
+        default_factory=lambda: EnsembleLayer(
+            visible=True, color="#888888", alpha=80, line_width=0.5
+        )
+    )
+    sigma_layer: EnsembleLayer = field(
+        default_factory=lambda: EnsembleLayer(
+            visible=True, color="#000000", alpha=255, line_width=1.5
+        )
+    )
+    max_individual: int = 5000
+    depth_max_plot: float = 100.0  # m
+
+    @property
+    def display_name(self) -> str:
+        return self.custom_name if self.custom_name else self.name
+
+    @property
+    def has_data(self) -> bool:
+        return self.depth_grid is not None and len(self.depth_grid) > 0
+
+    @property
+    def vs30_mean(self) -> Optional[float]:
+        if self.vs30_values is not None:
+            valid = self.vs30_values[~np.isnan(self.vs30_values)]
+            return float(np.mean(valid)) if len(valid) > 0 else None
+        return None
+
+    @property
+    def vs30_std(self) -> Optional[float]:
+        if self.vs30_values is not None:
+            valid = self.vs30_values[~np.isnan(self.vs30_values)]
+            return float(np.std(valid)) if len(valid) > 1 else None
+        return None
+
+    @property
+    def vs100_mean(self) -> Optional[float]:
+        if self.vs100_values is not None:
+            valid = self.vs100_values[~np.isnan(self.vs100_values)]
+            return float(np.mean(valid)) if len(valid) > 0 else None
+        return None
+
+    @property
+    def vs100_std(self) -> Optional[float]:
+        if self.vs100_values is not None:
+            valid = self.vs100_values[~np.isnan(self.vs100_values)]
+            return float(np.std(valid)) if len(valid) > 1 else None
+        return None
+
+
+@dataclass
 class FigureState:
     """Complete renderable state of a figure — the single source of truth
     that any backend (PyQtGraph interactive, Matplotlib export) reads from."""
@@ -220,6 +309,7 @@ class FigureState:
     link_y: bool = False
     link_x: bool = False
     subplot_names: Dict[str, str] = field(default_factory=dict)
+    subplot_types: Dict[str, str] = field(default_factory=dict)  # key -> "dc" or "vs_profile"
 
     # Data (references to live objects; renderer iterates these)
     curves: List[CurveData] = field(default_factory=list)
@@ -255,4 +345,86 @@ class FigureState:
             "n_ensembles": len(self.ensembles),
             "theme": self.theme,
             "velocity_unit": self.velocity_unit,
+            "subplot_types": dict(self.subplot_types),
         }
+
+    def save(self, filepath: str):
+        """Persist the full figure state (pickle) for later rendering."""
+        import pickle
+        data = {
+            "layout_mode": self.layout_mode,
+            "grid_rows": self.grid_rows,
+            "grid_cols": self.grid_cols,
+            "link_y": self.link_y,
+            "link_x": self.link_x,
+            "subplot_names": dict(self.subplot_names),
+            "subplot_types": dict(self.subplot_types),
+            "theme": self.theme,
+            "velocity_unit": self.velocity_unit,
+            "curves": [],
+            "ensembles": [],
+        }
+        for c in self.curves:
+            data["curves"].append({
+                "uid": c.uid, "name": c.name, "custom_name": c.custom_name,
+                "curve_type": c.curve_type, "wave_type": c.wave_type,
+                "source_type": c.source_type, "mode": c.mode,
+                "frequency": c.frequency, "velocity": c.velocity,
+                "slowness": c.slowness, "stddev": c.stddev,
+                "subplot_key": c.subplot_key, "color": c.color,
+                "line_width": c.line_width, "marker_size": c.marker_size,
+                "show_error_bars": c.show_error_bars, "visible": c.visible,
+                "point_mask": c.point_mask,
+                "resample_enabled": c.resample_enabled,
+                "resample_n_points": c.resample_n_points,
+                "fixed_logstd": c.fixed_logstd, "fixed_cov": c.fixed_cov,
+                "stddev_ranges": c.stddev_ranges,
+            })
+        for e in self.ensembles:
+            data["ensembles"].append({
+                "uid": e.uid, "name": e.name, "custom_name": e.custom_name,
+                "wave_type": e.wave_type, "mode": e.mode,
+                "n_profiles": e.n_profiles, "subplot_key": e.subplot_key,
+                "freq": e.freq, "median": e.median,
+                "p_low": e.p_low, "p_high": e.p_high,
+                "envelope_min": e.envelope_min, "envelope_max": e.envelope_max,
+                "sigma_ln": e.sigma_ln,
+                "individual_freqs": e.individual_freqs,
+                "individual_vels": e.individual_vels,
+            })
+        with open(filepath, "wb") as f:
+            pickle.dump(data, f)
+
+    @classmethod
+    def load(cls, filepath: str) -> "FigureState":
+        """Load a FigureState from a pickle file."""
+        import pickle
+        with open(filepath, "rb") as f:
+            data = pickle.load(f)
+        curves = []
+        for cd in data.get("curves", []):
+            c = CurveData(uid=cd["uid"], name=cd["name"])
+            for k, v in cd.items():
+                if k not in ("uid", "name") and hasattr(c, k):
+                    setattr(c, k, v)
+            curves.append(c)
+        ensembles = []
+        for ed in data.get("ensembles", []):
+            e = EnsembleData(uid=ed["uid"], name=ed["name"])
+            for k, v in ed.items():
+                if k not in ("uid", "name") and hasattr(e, k):
+                    setattr(e, k, v)
+            ensembles.append(e)
+        return cls(
+            layout_mode=data["layout_mode"],
+            grid_rows=data["grid_rows"],
+            grid_cols=data["grid_cols"],
+            link_y=data["link_y"],
+            link_x=data["link_x"],
+            subplot_names=data.get("subplot_names", {}),
+            subplot_types=data.get("subplot_types", {}),
+            curves=curves,
+            ensembles=ensembles,
+            theme=data.get("theme", "light"),
+            velocity_unit=data.get("velocity_unit", "metric"),
+        )

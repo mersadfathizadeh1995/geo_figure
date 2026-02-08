@@ -359,3 +359,140 @@ def make_ensemble_curves(
             curves.append(c)
 
     return curves
+
+
+# ── Vs Profile Extraction ──────────────────────────────────────
+
+def run_profile_pipeline(
+    report_file: Path,
+    geopsy_bin: Path,
+    bash_exe: Path,
+    profile_type: str = "vs",
+    selection_mode: str = "best",
+    n_best: int = 1000,
+    misfit_max: float = 1.0,
+    n_max_models: int = 1000,
+    depth_max: Optional[float] = None,
+) -> str:
+    """Run gpdcreport | gpprofile and return stdout text.
+
+    profile_type: 'vs', 'vp', or 'rho'.
+    """
+    report_bash = _to_bash_path(report_file)
+    flags = {"vs": "-vs", "vp": "-vp", "rho": "-rho"}
+    if profile_type not in flags:
+        raise ValueError(f"Unknown profile_type: {profile_type}")
+
+    if selection_mode == "best":
+        select_cmd = f"gpdcreport -best {n_best} {report_bash}"
+    else:
+        select_cmd = f"gpdcreport -m {misfit_max} -n {n_max_models} {report_bash}"
+
+    profile_cmd = f"gpprofile {flags[profile_type]}"
+    if depth_max is not None:
+        profile_cmd += f" -max-depth {depth_max}"
+
+    env_prefix = _build_env_prefix(geopsy_bin)
+    full_cmd = f"{env_prefix}{select_cmd} | {profile_cmd}"
+
+    logger.info(f"Running: {select_cmd} | {profile_cmd}")
+
+    result = subprocess.run(
+        [str(bash_exe), "-c", full_cmd],
+        capture_output=True, text=True, timeout=600,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Profile pipeline failed (rc={result.returncode}):\n{result.stderr}"
+        )
+    if not result.stdout.strip():
+        raise RuntimeError("Profile pipeline produced no output")
+
+    return result.stdout
+
+
+def parse_profile_output(
+    text: str,
+    key_marker: str = "Vs",
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Parse gpprofile output text into list of (depth, velocity) profiles.
+
+    Each profile is in paired format:
+      depths  = [0, d1, d1, d2, ...]
+      velocity = [v1, v1, v2, v2, ...]
+
+    key_marker: 'Vs', 'Vp', or 'Density' — section header to look for.
+    """
+    profiles = []
+    depth_vals = []
+    vel_vals = []
+    in_block = False
+
+    for line in text.splitlines():
+        if line.startswith("#"):
+            stripped = line.lstrip()
+            if stripped.startswith("# Layered model"):
+                if depth_vals:
+                    profiles.append(
+                        (np.array(depth_vals), np.array(vel_vals))
+                    )
+                    depth_vals = []
+                    vel_vals = []
+                in_block = False
+            elif stripped.startswith(f"# {key_marker}"):
+                in_block = True
+            elif stripped.startswith("# "):
+                # Different section header (e.g. # Vp when looking for Vs)
+                in_block = False
+            continue
+
+        if in_block and line.strip():
+            parts = line.split()
+            if len(parts) != 2:
+                continue
+            try:
+                velocity, depth = float(parts[0]), float(parts[1])
+                if np.isinf(depth):
+                    continue
+                vel_vals.append(velocity)
+                depth_vals.append(depth)
+            except ValueError:
+                continue
+
+    if depth_vals:
+        profiles.append((np.array(depth_vals), np.array(vel_vals)))
+
+    return profiles
+
+
+def extract_vs_profiles(
+    report_file: Path,
+    geopsy_bin: Path,
+    bash_exe: Path,
+    profile_type: str = "vs",
+    selection_mode: str = "best",
+    n_best: int = 1000,
+    misfit_max: float = 1.0,
+    n_max_models: int = 1000,
+    depth_max: Optional[float] = None,
+) -> List[Tuple[np.ndarray, np.ndarray]]:
+    """Full pipeline: extract from .report -> parse -> return profiles list.
+
+    Each profile is a (depth_array, velocity_array) tuple in paired format.
+    """
+    key_markers = {"vs": "Vs", "vp": "Vp", "rho": "Density"}
+    marker = key_markers.get(profile_type, "Vs")
+
+    text = run_profile_pipeline(
+        report_file=report_file,
+        geopsy_bin=geopsy_bin,
+        bash_exe=bash_exe,
+        profile_type=profile_type,
+        selection_mode=selection_mode,
+        n_best=n_best,
+        misfit_max=misfit_max,
+        n_max_models=n_max_models,
+        depth_max=depth_max,
+    )
+    return parse_profile_output(text, marker)

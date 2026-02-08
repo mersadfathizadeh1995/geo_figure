@@ -63,6 +63,26 @@ class LayoutActionsMixin:
     def _on_legend_changed(self, config: dict):
         """Apply legend settings to the current canvas."""
         canvas = self.sheet_tabs.get_current_canvas()
-        canvas.set_legend_visible(config["visible"])
-        canvas.set_legend_position(config["position"], config["offset"])
-        canvas.set_legend_font_size(config["font_size"])
+        # Store all values first, then single rebuild
+        canvas._legend_visible = config["visible"]
+        canvas._legend_pos = config["position"]
+        canvas._legend_offset = config["offset"]
+        canvas._legend_font_size = max(6, min(24, config["font_size"]))
+        canvas._legend_mode = config.get("mode", "per_subplot")
+        canvas.rebuild()
+
+    def _on_sheet_name_changed(self, new_name: str):
+        """Rename the current sheet tab from the Sheet panel."""
+        if not new_name:
+            return
+        idx = self.sheet_tabs.currentIndex()
+        old_name = self.sheet_tabs.tabText(idx)
+        # Update internal dict
+        widget = self.sheet_tabs.widget(idx)
+        for key, canvas in list(self.sheet_tabs._sheets.items()):
+            if canvas is widget:
+                del self.sheet_tabs._sheets[key]
+                self.sheet_tabs._sheets[new_name] = canvas
+                break
+        self.sheet_tabs.setTabText(idx, new_name)
+        self.curve_dock.setWindowTitle(f"Data - {new_name}")

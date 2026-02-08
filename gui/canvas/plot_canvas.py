@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QFileDialog, QInputDialog
 from PySide6.QtCore import Signal, Qt, QRectF
 from PySide6.QtGui import QColor, QPen, QImage, QPainter
 from typing import Dict, Optional, List
-from geo_figure.core.models import CurveData, CurveType, WaveType, EnsembleData
+from geo_figure.core.models import CurveData, CurveType, WaveType, EnsembleData, VsProfileData
 
 # Velocity unit conversion
 _VEL_FACTORS = {"metric": 1.0, "imperial": 3.28084}
@@ -28,9 +28,16 @@ class LogFreqAxis(pg.AxisItem):
         if minVal >= maxVal:
             return []
 
+        # Guard against extreme ranges (e.g. Vs profile using linear axes)
+        if maxVal > 10 or minVal < -5:
+            return super().tickValues(minVal, maxVal, size)
+
         # Convert log10 range to Hz
         hz_min = max(10 ** minVal, 0.01)
-        hz_max = 10 ** maxVal
+        try:
+            hz_max = 10 ** maxVal
+        except OverflowError:
+            return super().tickValues(minVal, maxVal, size)
 
         ticks = []
 
@@ -83,6 +90,7 @@ class LogFreqAxis(pg.AxisItem):
 LAYOUT_COMBINED = "combined"
 LAYOUT_SPLIT_WAVE = "split_wave"
 LAYOUT_GRID = "grid"
+LAYOUT_VS_PROFILE = "vs_profile"  # Vs profile + sigma_ln side by side
 
 
 class PlotCanvas(QWidget):
@@ -95,6 +103,7 @@ class PlotCanvas(QWidget):
         super().__init__(parent)
         self._curves: Dict[str, dict] = {}  # uid -> {data, plot, items}
         self._ensembles: Dict[str, dict] = {}  # ensemble_id -> {plot, items, stats}
+        self._vs_profiles: Dict[str, dict] = {}  # uid -> {data, plot, items}
         self._layout_mode = LAYOUT_COMBINED
         self._grid_rows = 1
         self._grid_cols = 1
@@ -102,6 +111,7 @@ class PlotCanvas(QWidget):
         self._link_x = False
         self._plots: Dict[str, pg.PlotItem] = {}  # key -> PlotItem
         self._subplot_names: Dict[str, str] = {}   # key -> display name
+        self._subplot_types: Dict[str, str] = {}   # key -> "dc" or "vs_profile"
         self._active_subplot: Optional[str] = None  # currently selected subplot key
         self._velocity_unit: str = "metric"  # "metric" (m/s) or "imperial" (ft/s)
         # Legend settings per subplot
@@ -110,6 +120,7 @@ class PlotCanvas(QWidget):
         self._legend_pos: str = "top-right"  # preset position key
         self._legend_offset: tuple = (-10, 10)  # (x, y) pixel offset
         self._legend_font_size: int = 9
+        self._legend_mode: str = "per_subplot"  # per_subplot | combined_outside | combined_first
         self._setup_ui()
 
     def _setup_ui(self):
@@ -144,6 +155,8 @@ class PlotCanvas(QWidget):
             self._plots['love'] = p_love
             self._subplot_names.setdefault('rayleigh', 'Rayleigh')
             self._subplot_names.setdefault('love', 'Love')
+            self._subplot_types['rayleigh'] = 'dc'
+            self._subplot_types['love'] = 'dc'
             for key in ['rayleigh', 'love']:
                 self._configure_plot(self._plots[key], key)
             if self._link_y:
@@ -151,27 +164,78 @@ class PlotCanvas(QWidget):
             if self._link_x:
                 p_love.setXLink(p_ray)
         elif self._layout_mode == LAYOUT_GRID:
-            first_plot = None
+            first_dc = None
+            first_vs = None
+            col_offset = 0  # tracks actual column in graphics layout
             for r in range(self._grid_rows):
+                col_offset = 0
                 for c in range(self._grid_cols):
                     key = f"cell_{r}_{c}"
+                    cell_type = self._subplot_types.get(key, 'dc')
                     default_name = f"Subplot ({r+1},{c+1})"
                     name = self._subplot_names.get(key, default_name)
                     self._subplot_names.setdefault(key, default_name)
-                    p = self.graphics_layout.addPlot(
-                        row=r, col=c,
-                        axisItems={'bottom': LogFreqAxis(orientation='bottom')},
-                        title=name,
-                    )
-                    self._plots[key] = p
-                    self._configure_plot(p, key)
-                    if first_plot is None:
-                        first_plot = p
+                    self._subplot_types.setdefault(key, 'dc')
+
+                    if cell_type == 'vs_profile':
+                        # Vs profile cell (linear axes, inverted Y)
+                        p = self.graphics_layout.addPlot(row=r, col=col_offset, title=name)
+                        self._plots[key] = p
+                        self._configure_vs_plot(p, key)
+
+                        # Add companion sigma_ln subplot
+                        sig_key = f"{key}_sigma"
+                        p_sig = self.graphics_layout.addPlot(row=r, col=col_offset + 1, title='')
+                        self._plots[sig_key] = p_sig
+                        self._configure_sigma_plot(p_sig, sig_key)
+                        p_sig.setYLink(p)
+                        # 3:1 stretch ratio for vs : sigma
+                        self.graphics_layout.ci.layout.setColumnStretchFactor(col_offset, 3)
+                        self.graphics_layout.ci.layout.setColumnStretchFactor(col_offset + 1, 1)
+                        col_offset += 2
+
+                        if first_vs is None:
+                            first_vs = p
+                        elif self._link_y:
+                            p.setYLink(first_vs)
                     else:
-                        if self._link_y:
-                            p.setYLink(first_plot)
-                        if self._link_x:
-                            p.setXLink(first_plot)
+                        # DC cell (log-frequency axes)
+                        p = self.graphics_layout.addPlot(
+                            row=r, col=col_offset,
+                            axisItems={'bottom': LogFreqAxis(orientation='bottom')},
+                            title=name,
+                        )
+                        self._plots[key] = p
+                        self._configure_plot(p, key)
+                        col_offset += 1
+
+                        if first_dc is None:
+                            first_dc = p
+                        else:
+                            if self._link_y:
+                                p.setYLink(first_dc)
+                            if self._link_x:
+                                p.setXLink(first_dc)
+        elif self._layout_mode == LAYOUT_VS_PROFILE:
+            # Dedicated Vs Profile layout: Vs plot (wide) + sigma_ln (narrow)
+            vs_name = self._subplot_names.get('vs_profile', 'Vs Profile')
+            sig_name = self._subplot_names.get('sigma_ln', '')
+            self._subplot_names.setdefault('vs_profile', 'Vs Profile')
+            self._subplot_names.setdefault('sigma_ln', '')
+            self._subplot_types['vs_profile'] = 'vs_profile'
+            self._subplot_types['sigma_ln'] = 'sigma_ln'
+
+            p_vs = self.graphics_layout.addPlot(row=0, col=0, title=vs_name)
+            self._plots['vs_profile'] = p_vs
+            self._configure_vs_plot(p_vs, 'vs_profile')
+
+            p_sig = self.graphics_layout.addPlot(row=0, col=1, title=sig_name)
+            self._plots['sigma_ln'] = p_sig
+            self._configure_sigma_plot(p_sig, 'sigma_ln')
+
+            p_sig.setYLink(p_vs)
+            self.graphics_layout.ci.layout.setColumnStretchFactor(0, 3)
+            self.graphics_layout.ci.layout.setColumnStretchFactor(1, 1)
         else:
             # Single combined plot
             name = self._subplot_names.get('main', '')
@@ -183,12 +247,17 @@ class PlotCanvas(QWidget):
                 p.setTitle(name)
             self._plots['main'] = p
             self._subplot_names.setdefault('main', '')
+            self._subplot_types['main'] = 'dc'
             self._configure_plot(p, 'main')
 
         # Prune stale keys from subplot_names
         stale = [k for k in self._subplot_names if k not in self._plots]
         for k in stale:
             del self._subplot_names[k]
+        # Prune stale types
+        stale_t = [k for k in self._subplot_types if k not in self._plots]
+        for k in stale_t:
+            del self._subplot_types[k]
 
         # Emit layout change so tree panel can update
         self.layout_changed.emit(self.get_subplot_info())
@@ -209,31 +278,90 @@ class PlotCanvas(QWidget):
         plot.setMouseEnabled(x=True, y=True)
         plot.enableAutoRange()
         # Replace default context menu with our own
-        plot.setMenuEnabled(False)
         plot.vb.menu = self._build_context_menu(plot)
         # Track clicks to set active subplot
         plot.scene().sigMouseClicked.connect(
             lambda ev, p=plot: self._on_plot_clicked(ev, p)
         )
-        # Add legend
-        if self._legend_visible and subplot_key:
+        # Always create a legend on the plot (may be hidden later by mode logic)
+        if self._legend_visible:
+            anchor = self._LEGEND_ANCHORS.get(self._legend_pos, ((1, 0), (1, 0)))
             legend = plot.addLegend(offset=self._legend_offset)
+            legend.anchor(*anchor)
+            legend.setLabelTextSize(f"{self._legend_font_size}pt")
+            if subplot_key:
+                self._legends[subplot_key] = legend
+            else:
+                for key, p in self._plots.items():
+                    if p is plot:
+                        self._legends[key] = legend
+                        break
+
+    def _configure_vs_plot(self, plot: pg.PlotItem, subplot_key: str):
+        """Configure a Vs profile subplot: linear axes, inverted Y (depth)."""
+        vel_unit = "ft/s" if self._velocity_unit == "imperial" else "m/s"
+        depth_unit = "ft" if self._velocity_unit == "imperial" else "m"
+        plot.setLabel('bottom', f'Vs ({vel_unit})')
+        plot.setLabel('left', f'Depth ({depth_unit})')
+        plot.showGrid(x=True, y=True, alpha=0.3)
+        plot.invertY(True)
+        for axis_name in ['bottom', 'left']:
+            axis = plot.getAxis(axis_name)
+            axis.enableAutoSIPrefix(False)
+            font = pg.QtGui.QFont("Segoe UI", 9)
+            axis.setStyle(tickFont=font)
+        plot.setMouseEnabled(x=True, y=True)
+        plot.enableAutoRange()
+        plot.vb.menu = self._build_context_menu(plot)
+        plot.scene().sigMouseClicked.connect(
+            lambda ev, p=plot: self._on_plot_clicked(ev, p)
+        )
+        if self._legend_visible:
+            anchor = self._LEGEND_ANCHORS.get(self._legend_pos, ((1, 0), (1, 0)))
+            legend = plot.addLegend(offset=self._legend_offset)
+            legend.anchor(*anchor)
             legend.setLabelTextSize(f"{self._legend_font_size}pt")
             self._legends[subplot_key] = legend
-        elif self._legend_visible:
+
+    def _configure_sigma_plot(self, plot: pg.PlotItem, subplot_key: str):
+        """Configure the sigma_ln subplot: narrow, shares Y with Vs plot."""
+        plot.setLabel('bottom', 'sigma_ln(Vs)')
+        plot.setLabel('left', '')  # shared Y, no label
+        plot.showGrid(x=True, y=True, alpha=0.3)
+        plot.invertY(True)
+        # Hide left tick labels (shared Y-axis)
+        plot.getAxis('left').setStyle(showValues=False)
+        plot.getAxis('left').setWidth(0)
+        for axis_name in ['bottom']:
+            axis = plot.getAxis(axis_name)
+            axis.enableAutoSIPrefix(False)
+            font = pg.QtGui.QFont("Segoe UI", 9)
+            axis.setStyle(tickFont=font)
+        plot.setMouseEnabled(x=True, y=True)
+        plot.setXRange(0, 0.5, padding=0.05)
+        plot.vb.menu = self._build_context_menu(plot)
+        plot.scene().sigMouseClicked.connect(
+            lambda ev, p=plot: self._on_plot_clicked(ev, p)
+        )
+        # Legend for sigma_ln
+        if self._legend_visible:
+            anchor = self._LEGEND_ANCHORS.get(self._legend_pos, ((1, 0), (1, 0)))
             legend = plot.addLegend(offset=self._legend_offset)
+            legend.anchor(*anchor)
             legend.setLabelTextSize(f"{self._legend_font_size}pt")
-            for key, p in self._plots.items():
-                if p is plot:
-                    self._legends[key] = legend
-                    break
+            self._legends[subplot_key] = legend
 
     def _build_context_menu(self, plot: pg.PlotItem):
         """Build a clean context menu for a plot."""
         from PySide6.QtWidgets import QMenu
         menu = QMenu()
+
+        # Fit
         menu.addAction("Fit to Data", lambda p=plot: p.enableAutoRange())
+
         menu.addSeparator()
+
+        # Grid toggle
         grid_action = menu.addAction("Toggle Grid")
         grid_action.triggered.connect(
             lambda checked, p=plot: p.showGrid(
@@ -242,35 +370,99 @@ class PlotCanvas(QWidget):
                 alpha=0.15,
             )
         )
+
+        # Legend toggle
+        legend_action = menu.addAction(
+            "Hide Legend" if self._legend_visible else "Show Legend"
+        )
+        legend_action.triggered.connect(self._toggle_legend_from_menu)
+
         menu.addSeparator()
+
+        # Rename subplot
+        rename_action = menu.addAction("Rename Subplot...")
+        rename_action.triggered.connect(lambda: self._rename_subplot_from_menu(plot))
+
+        menu.addSeparator()
+
+        # Export
         menu.addAction("Export Canvas Image...", self._on_export_action)
+
         return menu
+
+    def _toggle_legend_from_menu(self):
+        """Toggle legend visibility via context menu."""
+        self.set_legend_visible(not self._legend_visible)
+
+    def _rename_subplot_from_menu(self, plot):
+        """Rename the clicked subplot via dialog."""
+        key = None
+        for k, p in self._plots.items():
+            if p is plot:
+                key = k
+                break
+        if key is None:
+            return
+        current_name = self._subplot_names.get(key, key)
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Subplot", "New name:", text=current_name
+        )
+        if ok and new_name.strip():
+            self.rename_subplot(key, new_name.strip())
 
     def rebuild(self):
         """Rebuild all plots (e.g. after theme change)."""
         saved_curves = {uid: info['data'] for uid, info in self._curves.items()}
         saved_ensembles = {eid: info['data'] for eid, info in self._ensembles.items()}
+        saved_profiles = {uid: info['data'] for uid, info in self._vs_profiles.items()}
         self._curves.clear()
         self._ensembles.clear()
+        self._vs_profiles.clear()
         self._build_layout()
         for uid, curve in saved_curves.items():
             self.add_curve(curve)
         for eid, ens in saved_ensembles.items():
             self.add_ensemble(ens)
+        for uid, prof in saved_profiles.items():
+            self.add_vs_profile(prof)
+        self._apply_legend_mode()
         self.auto_range()
 
     def set_layout_mode(self, mode: str):
         """Switch layout mode and re-plot all curves."""
         if mode == self._layout_mode:
             return
+        old_mode = self._layout_mode
         self._layout_mode = mode
+        # If transitioning from Vs Profile to a DC layout, migrate profiles to 'main'
+        if old_mode == LAYOUT_VS_PROFILE and mode != LAYOUT_GRID:
+            for uid, entry in self._vs_profiles.items():
+                data = entry.get('data')
+                if data:
+                    data.subplot_key = 'main'
         self.rebuild()
 
     def set_grid(self, rows: int, cols: int):
         """Set NxM grid layout."""
+        old_mode = self._layout_mode
         self._grid_rows = max(1, rows)
         self._grid_cols = max(1, cols)
         self._layout_mode = LAYOUT_GRID
+
+        # Migrate subplot types when transitioning from dedicated Vs Profile layout
+        if old_mode == LAYOUT_VS_PROFILE:
+            self._subplot_types['cell_0_0'] = 'vs_profile'
+            # Re-assign all Vs profile data to the first grid cell
+            for uid, entry in self._vs_profiles.items():
+                data = entry.get('data')
+                if data:
+                    data.subplot_key = 'cell_0_0'
+
+        self.rebuild()
+
+    def set_subplot_type(self, key: str, stype: str):
+        """Mark a subplot cell as 'dc' or 'vs_profile' and rebuild."""
+        self._subplot_types[key] = stype
         self.rebuild()
 
     def set_link_y(self, linked: bool):
@@ -284,12 +476,22 @@ class PlotCanvas(QWidget):
         self.rebuild()
 
     def get_subplot_info(self) -> list:
-        """Return [(key, name), ...] for all subplots."""
-        return [(k, self._subplot_names.get(k, k)) for k in self._plots.keys()]
+        """Return [(key, name), ...] for all user-visible subplots.
+
+        Sigma_ln companion cells are internal and excluded.
+        """
+        return [
+            (k, self._subplot_names.get(k, k))
+            for k in self._plots.keys()
+            if not k.endswith('_sigma') and k != 'sigma_ln'
+        ]
 
     def get_subplot_keys(self) -> list:
-        """Return list of subplot keys."""
-        return list(self._plots.keys())
+        """Return list of user-visible subplot keys."""
+        return [
+            k for k in self._plots.keys()
+            if not k.endswith('_sigma') and k != 'sigma_ln'
+        ]
 
     def rename_subplot(self, key: str, name: str):
         """Rename a subplot's title."""
@@ -310,7 +512,21 @@ class PlotCanvas(QWidget):
             "link_y": self._link_y,
             "link_x": self._link_x,
             "subplot_names": dict(self._subplot_names),
+            "subplot_types": dict(self._subplot_types),
         }
+
+    def _get_plot_column(self, plot):
+        """Find which column a PlotItem occupies in the graphics layout."""
+        try:
+            ci = self.graphics_layout.ci
+            for r in range(ci.layout.rowCount()):
+                for c in range(ci.layout.columnCount()):
+                    item = ci.layout.itemAt(r, c)
+                    if item and item.graphicsItem() is plot:
+                        return c
+        except Exception:
+            pass
+        return None
 
     # ── Legend management ─────────────────────────────────────────
 
@@ -336,12 +552,22 @@ class PlotCanvas(QWidget):
                 "bottom-right": (-10, -10), "bottom-left": (10, -10),
             }
             self._legend_offset = default_offsets.get(position, (-10, 10))
-        self.rebuild()
+        # Apply to existing legends without full rebuild
+        anchor = self._LEGEND_ANCHORS.get(self._legend_pos, ((1, 0), (1, 0)))
+        for legend in self._legends.values():
+            legend.anchor(*anchor)
+            legend.setOffset(self._legend_offset)
 
     def set_legend_font_size(self, size: int):
         self._legend_font_size = max(6, min(24, size))
         for legend in self._legends.values():
             legend.setLabelTextSize(f"{self._legend_font_size}pt")
+
+    def set_legend_mode(self, mode: str):
+        """Set legend mode: per_subplot, combined_outside, combined_first, combined_second."""
+        if mode != self._legend_mode:
+            self._legend_mode = mode
+            self.rebuild()
 
     def get_legend_config(self) -> dict:
         return {
@@ -349,7 +575,76 @@ class PlotCanvas(QWidget):
             "position": self._legend_pos,
             "offset": self._legend_offset,
             "font_size": self._legend_font_size,
+            "mode": self._legend_mode,
         }
+
+    def _apply_legend_mode(self):
+        """After rebuild, rearrange legends according to the current mode."""
+        if not self._legend_visible or not self._legends:
+            return
+
+        keys = list(self._plots.keys())
+        if len(keys) <= 1:
+            # Only one subplot — nothing to combine
+            return
+
+        if self._legend_mode == "per_subplot":
+            # Default: each subplot keeps its own legend
+            return
+
+        # Determine the target subplot for the combined legend
+        if self._legend_mode == "combined_first":
+            target_key = keys[0]
+        elif self._legend_mode == "combined_second":
+            target_key = keys[1] if len(keys) > 1 else keys[0]
+        elif self._legend_mode == "combined_outside":
+            target_key = keys[0]
+        else:
+            return
+
+        target_legend = self._legends.get(target_key)
+        if target_legend is None:
+            return
+
+        # Collect named items from all non-target legends, then hide those legends
+        for key in keys:
+            if key == target_key:
+                continue
+            legend = self._legends.get(key)
+            if legend is None:
+                continue
+            # Copy items to target legend
+            for sample, label in list(legend.items):
+                name = label.text
+                if name:
+                    target_legend.addItem(sample, name)
+            # Hide the source legend
+            legend.setVisible(False)
+
+        # For combined_outside, move legend outside the plots
+        if self._legend_mode == "combined_outside":
+            # Hide the on-plot target legend too; we'll create a standalone one
+            target_legend.setVisible(False)
+            # Create a standalone legend in a new column
+            standalone = pg.LegendItem()
+            standalone.setLabelTextSize(f"{self._legend_font_size}pt")
+            # Collect all named items from ALL legends (including target)
+            for key in keys:
+                legend = self._legends.get(key)
+                if legend is None:
+                    continue
+                for sample, label in list(legend.items):
+                    name = label.text
+                    if name:
+                        standalone.addItem(sample, name)
+            max_col = max(
+                (c for r in range(self.graphics_layout.ci.layout.rowCount())
+                 for c in range(self.graphics_layout.ci.layout.columnCount())
+                 if self.graphics_layout.ci.layout.itemAt(r, c) is not None),
+                default=0,
+            )
+            self.graphics_layout.ci.addItem(standalone, row=0, col=max_col + 1)
+            self._legends["__combined__"] = standalone
 
     def _get_plot_for_curve(self, curve: CurveData) -> pg.PlotItem:
         """Return the correct plot item for a curve based on its subplot_key."""
@@ -756,3 +1051,220 @@ class PlotCanvas(QWidget):
         )
         if not hit_scatter:
             pass
+
+    # ── Vs Profile rendering ─────────────────────────────────
+
+    def add_vs_profile(self, prof_data):
+        """Add a VsProfileData to the canvas.
+
+        Renders on vs_profile subplot: gray spaghetti with halfspace extension,
+        percentile fill_betweenx, bold step-function median.
+        Also renders sigma_ln on sigma_ln subplot if available.
+        """
+        uid = prof_data.uid
+        convert = 3.28084 if self._velocity_unit == "imperial" else 1.0
+        vel_unit = _VEL_UNIT_STR.get(self._velocity_unit, "m/s")
+
+        # Compute actual data depth (max finite depth across all profiles)
+        data_depth = 0.0
+        if prof_data.profiles:
+            for d, v in prof_data.profiles:
+                finite = d[np.isfinite(d) & (d > 0)]
+                if len(finite) > 0:
+                    data_depth = max(data_depth, float(np.max(finite)))
+        if data_depth <= 0:
+            data_depth = prof_data.depth_max_plot
+        # Extend halfspace a bit beyond data (10% or at least 5m)
+        depth_max = data_depth + max(data_depth * 0.1, 5.0)
+
+        # Target the vs_profile subplot; fall back to active/first
+        vs_plot = self._plots.get('vs_profile')
+        sig_plot = self._plots.get('sigma_ln')
+        # For grid cells, look up the target cell and its sigma companion
+        target_key = prof_data.subplot_key or self.active_subplot
+        if not vs_plot:
+            vs_plot = self._plots.get(target_key)
+            if not vs_plot:
+                vs_plot = list(self._plots.values())[0]
+            vs_plot.invertY(True)
+        if not sig_plot:
+            # Look for grid-cell companion: cell_R_C -> cell_R_C_sigma
+            sig_plot = self._plots.get(f"{target_key}_sigma")
+
+        items = {"vs_plot": vs_plot, "sig_plot": sig_plot, "data": prof_data, "item_list": []}
+
+        # --- Percentile band (fill between) — drawn first (bottom layer) ---
+        if prof_data.percentile_layer.visible and prof_data.depth_grid is not None:
+            c = pg.mkColor(prof_data.percentile_layer.color)
+            c.setAlpha(prof_data.percentile_layer.alpha)
+            dg = prof_data.depth_grid
+            mask = dg <= depth_max
+            fill_low = pg.PlotDataItem(prof_data.p_low[mask] * convert, dg[mask])
+            fill_high = pg.PlotDataItem(prof_data.p_high[mask] * convert, dg[mask])
+            fill = pg.FillBetweenItem(fill_low, fill_high, brush=pg.mkBrush(c))
+            vs_plot.addItem(fill_low)
+            vs_plot.addItem(fill_high)
+            vs_plot.addItem(fill)
+            fill_low.setVisible(False)
+            fill_high.setVisible(False)
+            items["item_list"].extend([fill_low, fill_high, fill])
+            # Legend entry for percentile band
+            pct_ghost = pg.PlotDataItem(
+                [], [], pen=pg.mkPen(color=c, width=6),
+                name="5-95 Percentile",
+            )
+            vs_plot.addItem(pct_ghost)
+            items["item_list"].append(pct_ghost)
+
+        # --- Individual spaghetti with halfspace extension (middle layer) ---
+        if prof_data.individual_layer.visible and prof_data.profiles:
+            n_show = min(prof_data.max_individual, len(prof_data.profiles))
+            step = max(1, len(prof_data.profiles) // n_show)
+            c = pg.mkColor(prof_data.individual_layer.color)
+            c.setAlpha(prof_data.individual_layer.alpha)
+            pen = pg.mkPen(color=c, width=prof_data.individual_layer.line_width)
+            for d, v in prof_data.profiles[::step]:
+                finite_mask = np.isfinite(d) & (d > 0)
+                if not np.any(finite_mask):
+                    continue
+                last_valid = np.max(np.where(finite_mask)[0])
+                d_plot = d[:last_valid + 1].copy()
+                v_plot = (v[:last_valid + 1] * convert).copy()
+                if d_plot[-1] < depth_max:
+                    d_plot = np.append(d_plot, depth_max)
+                    v_plot = np.append(v_plot, v_plot[-1])
+                line = pg.PlotDataItem(v_plot, d_plot, pen=pen)
+                vs_plot.addItem(line)
+                items["item_list"].append(line)
+            # Legend entry for individual profiles (only one)
+            ghost = pg.PlotDataItem(
+                [], [], pen=pg.mkPen(color=c, width=1.0),
+                name=f"{prof_data.n_profiles} Profiles",
+            )
+            vs_plot.addItem(ghost)
+            items["item_list"].append(ghost)
+
+        # --- Bold median line (top layer — drawn last) ---
+        if prof_data.median_layer.visible and prof_data.median_depth_paired is not None:
+            pen = pg.mkPen(
+                color=prof_data.median_layer.color,
+                width=prof_data.median_layer.line_width,
+            )
+            md = prof_data.median_depth_paired.copy()
+            mv = (prof_data.median_vel_paired * convert).copy()
+            finite_mask = np.isfinite(md) & (md > 0)
+            if np.any(finite_mask):
+                last_valid = np.max(np.where(finite_mask)[0])
+                md = md[:last_valid + 1]
+                mv = mv[:last_valid + 1]
+                if md[-1] < depth_max:
+                    md = np.append(md, depth_max)
+                    mv = np.append(mv, mv[-1])
+            median_line = pg.PlotDataItem(
+                mv, md, pen=pen,
+                name=f"Median ({prof_data.n_profiles} profiles)",
+            )
+            vs_plot.addItem(median_line)
+            items["item_list"].append(median_line)
+
+        # --- VsN legend entry (unit-based: Vs30 for m/s, Vs100 for ft/s) ---
+        if self._velocity_unit == "imperial":
+            if prof_data.vs100_mean is not None:
+                vsn_txt = f"Vs100 = {prof_data.vs100_mean:.0f} ft/s"
+                if prof_data.vs100_std is not None:
+                    vsn_txt += f" (std = {prof_data.vs100_std:.1f})"
+                vsn_ghost = pg.PlotDataItem([], [], pen=pg.mkPen(None), name=vsn_txt)
+                vs_plot.addItem(vsn_ghost)
+                items["item_list"].append(vsn_ghost)
+        else:
+            if prof_data.vs30_mean is not None:
+                vsn_txt = f"Vs30 = {prof_data.vs30_mean:.0f} {vel_unit}"
+                if prof_data.vs30_std is not None:
+                    vsn_txt += f" (std = {prof_data.vs30_std:.1f})"
+                vsn_ghost = pg.PlotDataItem([], [], pen=pg.mkPen(None), name=vsn_txt)
+                vs_plot.addItem(vsn_ghost)
+                items["item_list"].append(vsn_ghost)
+
+        # Set Y range (depth 0 at top, depth_max at bottom)
+        vs_plot.setYRange(0, depth_max, padding=0.02)
+        vs_plot.enableAutoRange(axis="x")
+
+        # --- Sigma_ln subplot ---
+        if sig_plot and prof_data.sigma_layer.visible and prof_data.sigma_ln is not None:
+            dg = prof_data.depth_grid
+            mask = dg <= depth_max
+            sig_pen = pg.mkPen(
+                color=prof_data.sigma_layer.color,
+                width=prof_data.sigma_layer.line_width,
+            )
+            sig_line = pg.PlotDataItem(
+                prof_data.sigma_ln[mask], dg[mask], pen=sig_pen,
+                name="sigma_ln(Vs)",
+            )
+            sig_plot.addItem(sig_line)
+            items["item_list"].append(sig_line)
+            sig_max = max(0.5, float(np.nanmax(prof_data.sigma_ln[mask])) * 1.1)
+            sig_plot.setXRange(0, sig_max, padding=0.05)
+            # Ensure sigma_ln subplot is visible
+            sig_plot.setVisible(True)
+            sig_col = self._get_plot_column(sig_plot)
+            if sig_col is not None:
+                self.graphics_layout.ci.layout.setColumnStretchFactor(sig_col, 1)
+        elif sig_plot and not prof_data.sigma_layer.visible:
+            # Hide sigma_ln subplot entirely
+            sig_plot.setVisible(False)
+            sig_col = self._get_plot_column(sig_plot)
+            if sig_col is not None:
+                self.graphics_layout.ci.layout.setColumnStretchFactor(sig_col, 0)
+
+        self._vs_profiles[uid] = items
+        self._apply_legend_mode()
+
+    def remove_vs_profile(self, uid: str):
+        """Remove a VsProfileData from the canvas."""
+        entry = self._vs_profiles.pop(uid, None)
+        if not entry:
+            return
+        for item in entry.get("item_list", []):
+            try:
+                # Items may be on vs_plot or sig_plot
+                for plot_key in ("vs_plot", "sig_plot"):
+                    p = entry.get(plot_key)
+                    if p:
+                        try:
+                            p.removeItem(item)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+        self._apply_legend_mode()
+
+    def set_vs_profile_layer_visible(self, uid: str, layer_name: str, visible: bool):
+        """Toggle visibility for one layer of a Vs profile."""
+        entry = self._vs_profiles.get(uid)
+        if not entry:
+            return
+        prof = entry["data"]
+        if layer_name == "median":
+            prof.median_layer.visible = visible
+        elif layer_name == "percentile":
+            prof.percentile_layer.visible = visible
+        elif layer_name == "individual":
+            prof.individual_layer.visible = visible
+        elif layer_name == "sigma":
+            prof.sigma_layer.visible = visible
+        self._rebuild_vs_profile(uid)
+
+    def _rebuild_vs_profile(self, uid: str):
+        """Remove and re-add a profile with current settings."""
+        entry = self._vs_profiles.get(uid)
+        if not entry:
+            return
+        prof = entry["data"]
+        self.remove_vs_profile(uid)
+        self.add_vs_profile(prof)
+
+    def clear_vs_profiles(self):
+        """Remove all Vs profiles."""
+        for uid in list(self._vs_profiles.keys()):
+            self.remove_vs_profile(uid)

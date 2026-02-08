@@ -9,9 +9,11 @@ class SheetManagerMixin:
         """Create sheet data store if it doesn't exist."""
         if idx not in self._sheet_data:
             self._sheet_data[idx] = {
-                'curves': {}, 'ensembles': {},
+                'curves': {}, 'ensembles': {}, 'vs_profiles': {},
                 'selected_uid': None, 'velocity_unit': 'metric'
             }
+        elif 'vs_profiles' not in self._sheet_data[idx]:
+            self._sheet_data[idx]['vs_profiles'] = {}
 
     @property
     def _curves(self) -> dict:
@@ -26,6 +28,12 @@ class SheetManagerMixin:
         return self._sheet_data[self._current_sheet_idx]['ensembles']
 
     @property
+    def _vs_profiles(self) -> dict:
+        """Vs profiles for the current sheet."""
+        self._ensure_sheet_data(self._current_sheet_idx)
+        return self._sheet_data[self._current_sheet_idx]['vs_profiles']
+
+    @property
     def _selected_uid(self):
         self._ensure_sheet_data(self._current_sheet_idx)
         return self._sheet_data[self._current_sheet_idx]['selected_uid']
@@ -36,7 +44,7 @@ class SheetManagerMixin:
         self._sheet_data[self._current_sheet_idx]['selected_uid'] = val
 
     def _rebuild_tree(self):
-        """Rebuild the Data tree from current sheet's curves + ensembles."""
+        """Rebuild the Data tree from current sheet's curves + ensembles + profiles."""
         canvas = self.sheet_tabs.get_current_canvas()
         subplot_info = canvas.get_subplot_info()
         self.curve_tree.set_subplot_structure(subplot_info)
@@ -44,6 +52,8 @@ class SheetManagerMixin:
             self.curve_tree.add_curve(curve)
         for uid, ens in self._ensembles.items():
             self.curve_tree.add_ensemble(ens)
+        for uid, prof in self._vs_profiles.items():
+            self.curve_tree.add_vs_profile(prof)
         self.properties.set_available_subplots(subplot_info)
 
     def _on_sheet_changed(self, index: int):
@@ -73,8 +83,13 @@ class SheetManagerMixin:
         else:
             self.properties.clear()
 
-        # Sync legend config from canvas to properties
-        self.properties.set_legend_config(canvas.get_legend_config())
+        # Sync legend config from canvas to sheet panel
+        self.sheet_panel.set_legend_config(canvas.get_legend_config())
+        # Sync sheet info
+        sheet_name = self.sheet_tabs.tabText(index) if index >= 0 else ""
+        self.sheet_panel.set_sheet_info(
+            sheet_name, canvas.get_subplot_keys()
+        )
 
         # Connect canvas signals for this canvas
         with warnings.catch_warnings():
@@ -111,6 +126,7 @@ class SheetManagerMixin:
         # Apply source layout to new canvas
         new_canvas = self.sheet_tabs.get_current_canvas()
         new_canvas._subplot_names = dict(src_layout_cfg["subplot_names"])
+        new_canvas._subplot_types = dict(src_layout_cfg.get("subplot_types", {}))
         new_canvas._link_y = src_layout_cfg["link_y"]
         new_canvas._link_x = src_layout_cfg["link_x"]
         mode = src_layout_cfg["layout_mode"]
@@ -157,6 +173,14 @@ class SheetManagerMixin:
             self._ensembles[e.uid] = e
             self.curve_tree.add_ensemble(e)
             new_canvas.add_ensemble(e)
+
+        for uid, prof in src.get('vs_profiles', {}).items():
+            import copy as _copy
+            p = _copy.copy(prof)
+            p.uid = str(_uuid.uuid4())[:8]
+            self._vs_profiles[p.uid] = p
+            self.curve_tree.add_vs_profile(p)
+            new_canvas.add_vs_profile(p)
 
         new_canvas.auto_range()
         self.log_panel.log_info(f"Duplicated sheet '{src_name}' -> '{new_name}'")

@@ -79,6 +79,7 @@ class MenuSetupMixin:
         view_menu = menubar.addMenu("&View")
         view_menu.addAction(self.curve_dock.toggleViewAction())
         view_menu.addAction(self.props_dock.toggleViewAction())
+        view_menu.addAction(self.sheet_dock.toggleViewAction())
         view_menu.addAction(self.log_dock.toggleViewAction())
         view_menu.addSeparator()
 
@@ -106,9 +107,8 @@ class MenuSetupMixin:
         misfit_action = analysis_menu.addAction("Compute Misfit Residual...")
         misfit_action.triggered.connect(self._on_compute_misfit)
         analysis_menu.addSeparator()
-        analysis_menu.addAction("Vs Profile Mode").triggered.connect(
-            lambda: self.log_panel.log_info("Vs Profile mode -- coming soon")
-        )
+        vs_profile_action = analysis_menu.addAction("Extract Vs Profile...")
+        vs_profile_action.triggered.connect(self._on_vs_profile)
 
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -117,6 +117,7 @@ class MenuSetupMixin:
 
     def _setup_toolbar(self):
         toolbar = QToolBar("Main Toolbar")
+        toolbar.setObjectName("toolbar_main")
         toolbar.setMovable(False)
         toolbar.setIconSize(QSize(20, 20))
         toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
@@ -133,6 +134,10 @@ class MenuSetupMixin:
         dc_act = toolbar.addAction("DC Compare")
         dc_act.setToolTip("Load .report for DC Compare (Analysis)")
         dc_act.triggered.connect(self._on_dc_compare)
+
+        vs_act = toolbar.addAction("Vs Profile")
+        vs_act.setToolTip("Extract Vs profiles from .report")
+        vs_act.triggered.connect(self._on_vs_profile)
 
         toolbar.addSeparator()
 

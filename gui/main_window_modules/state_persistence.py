@@ -8,14 +8,30 @@ from PySide6.QtWidgets import QApplication, QMessageBox
 class StatePersistenceMixin:
     """Persistence, settings, theme, and figure-state capture."""
 
+    _STATE_VERSION = 2  # bump when dock layout changes
+
     def _restore_state(self):
         settings = QSettings("GeoFigure", "GeoFigure")
+        version = settings.value("state_version", 0)
+        try:
+            version = int(version)
+        except (TypeError, ValueError):
+            version = 0
+        if version != self._STATE_VERSION:
+            # Stale state from older layout — skip restore
+            settings.remove("geometry")
+            settings.remove("windowState")
+            settings.setValue("state_version", self._STATE_VERSION)
+            return
         geo = settings.value("geometry")
         if geo:
             self.restoreGeometry(geo)
         state = settings.value("windowState")
         if state:
-            self.restoreState(state)
+            try:
+                self.restoreState(state)
+            except Exception:
+                pass
 
     def _save_ensemble_temp(self, ens):
         """Save ensemble stats to temp directory for session persistence."""
@@ -42,8 +58,53 @@ class StatePersistenceMixin:
         settings = QSettings("GeoFigure", "GeoFigure")
         settings.setValue("geometry", self.saveGeometry())
         settings.setValue("windowState", self.saveState())
-        # Project directory persists -- do NOT delete it
+        settings.setValue("state_version", self._STATE_VERSION)
+        # Auto-save figure state for each sheet
+        self._save_all_sheet_states()
         event.accept()
+
+    def _save_all_sheet_states(self):
+        """Persist FigureState for every sheet to the project session dir."""
+        session_dir = os.path.join(str(self._project_dir), "session")
+        os.makedirs(session_dir, exist_ok=True)
+        for i in range(self.sheet_tabs.count()):
+            self._current_sheet_idx = i
+            self._ensure_sheet_data(i)
+            try:
+                state = self.capture_figure_state_for_sheet(i)
+                sheet_name = self.sheet_tabs.tabText(i)
+                safe_name = "".join(
+                    c if c.isalnum() or c in (' ', '_', '-') else '_'
+                    for c in sheet_name
+                ).strip()
+                fpath = os.path.join(session_dir, f"sheet_{i}_{safe_name}.state")
+                state.save(fpath)
+            except Exception:
+                pass
+
+    def capture_figure_state_for_sheet(self, sheet_index: int):
+        """Build a FigureState for a specific sheet index."""
+        from geo_figure.core.models import FigureState
+        canvas = self.sheet_tabs.widget(sheet_index)
+        cfg = canvas.get_layout_config()
+        theme = QSettings("GeoFigure", "GeoFigure").value("theme", "light")
+        sd = self._sheet_data.get(sheet_index, {})
+        vel_unit = sd.get('velocity_unit', 'metric')
+        curves = list(sd.get('curves', {}).values())
+        ensembles = list(sd.get('ensembles', {}).values())
+        return FigureState(
+            layout_mode=cfg["layout_mode"],
+            grid_rows=cfg["grid_rows"],
+            grid_cols=cfg["grid_cols"],
+            link_y=cfg["link_y"],
+            link_x=cfg["link_x"],
+            subplot_names=cfg["subplot_names"],
+            subplot_types=cfg.get("subplot_types", {}),
+            curves=curves,
+            ensembles=ensembles,
+            theme=theme,
+            velocity_unit=vel_unit,
+        )
 
     def capture_figure_state(self):
         """Build a FigureState snapshot of the current sheet."""
@@ -62,6 +123,7 @@ class StatePersistenceMixin:
             link_y=cfg["link_y"],
             link_x=cfg["link_x"],
             subplot_names=cfg["subplot_names"],
+            subplot_types=cfg.get("subplot_types", {}),
             curves=list(self._curves.values()),
             ensembles=list(self._ensembles.values()),
             theme=theme,

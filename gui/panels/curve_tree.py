@@ -6,12 +6,13 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt, QMimeData
 from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter, QBrush, QDrag
 from typing import Dict, Optional, List, Tuple
-from geo_figure.core.models import CurveData, CurveType, EnsembleData, CURVE_COLORS
+from geo_figure.core.models import CurveData, CurveType, EnsembleData, VsProfileData, CURVE_COLORS
 
 # Data keys stored in tree items
 _SUBPLOT_PREFIX = "__subplot__"
 _ENSEMBLE_PREFIX = "__ens__"
 _LAYER_PREFIX = "__layer__"
+_PROFILE_PREFIX = "__vsp__"
 _ROLE_UID = Qt.UserRole
 _ROLE_POINT_IDX = Qt.UserRole + 1
 
@@ -94,11 +95,15 @@ class CurveTreePanel(QWidget):
     ensemble_layer_toggled = Signal(str, str, bool)  # ens_uid, layer_name, visible
     remove_ensemble_requested = Signal(str)    # ensemble uid
     ensemble_subplot_changed = Signal(str, str)  # ens_uid, new_subplot_key
+    vs_profile_selected = Signal(str, str)           # profile uid, layer_name ("" for root)
+    vs_profile_layer_toggled = Signal(str, str, bool)  # prof_uid, layer, visible
+    remove_vs_profile_requested = Signal(str)   # profile uid
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._curves: Dict[str, QTreeWidgetItem] = {}  # uid -> tree item
         self._ensembles: Dict[str, QTreeWidgetItem] = {}  # ens uid -> tree item
+        self._vs_profiles: Dict[str, QTreeWidgetItem] = {}  # profile uid -> tree item
         self._subplot_roots: Dict[str, QTreeWidgetItem] = {}  # key -> root item
         self._color_index = 0
         self._setup_ui()
@@ -258,12 +263,66 @@ class CurveTreePanel(QWidget):
             del self._ensembles[uid]
             self._update_counts()
 
+    def add_vs_profile(self, prof: VsProfileData):
+        """Add a Vs profile with sub-layer items to the tree."""
+        parent = self._subplot_roots.get(prof.subplot_key)
+        if not parent and self._subplot_roots:
+            parent = list(self._subplot_roots.values())[0]
+        if not parent:
+            return
+
+        self.tree.blockSignals(True)
+
+        ptype = {"vs": "Vs", "vp": "Vp", "rho": "Density"}.get(prof.profile_type, "Vs")
+        label = f"{prof.display_name}  ({prof.n_profiles} models)"
+        item = QTreeWidgetItem(parent, [label])
+        item.setData(0, _ROLE_UID, f"{_PROFILE_PREFIX}{prof.uid}")
+        flags = item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled
+        flags = flags & ~Qt.ItemIsDropEnabled
+        item.setFlags(flags)
+        item.setCheckState(0, Qt.Checked)
+        self._set_item_color(item, prof.median_layer.color)
+
+        layer_defs = [
+            ("median", "Median", prof.median_layer),
+            ("percentile", "5-95 Percentile Band", prof.percentile_layer),
+            ("individual", "Individual Profiles", prof.individual_layer),
+            ("sigma", "Sigma_ln", prof.sigma_layer),
+        ]
+        for layer_name, layer_label, layer in layer_defs:
+            child = QTreeWidgetItem(item, [layer_label])
+            child.setData(0, _ROLE_UID, f"{_PROFILE_PREFIX}{prof.uid}")
+            child.setData(0, _ROLE_POINT_IDX, f"{_LAYER_PREFIX}{layer_name}")
+            child_flags = child.flags() | Qt.ItemIsUserCheckable
+            child_flags = child_flags & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled
+            child.setFlags(child_flags)
+            child.setCheckState(0, Qt.Checked if layer.visible else Qt.Unchecked)
+            self._set_item_color(child, layer.color)
+
+        item.setExpanded(True)
+        self.tree.blockSignals(False)
+
+        self._vs_profiles[prof.uid] = item
+        self._update_counts()
+
+    def remove_vs_profile(self, uid: str):
+        """Remove a Vs profile from the tree."""
+        item = self._vs_profiles.get(uid)
+        if item:
+            parent = item.parent()
+            if parent:
+                parent.removeChild(item)
+            del self._vs_profiles[uid]
+            self._update_counts()
+
     def clear_all(self):
-        """Remove all curves and ensembles from the tree."""
+        """Remove all curves, ensembles, and profiles from the tree."""
         for uid in list(self._curves.keys()):
             self.remove_curve(uid)
         for uid in list(self._ensembles.keys()):
             self.remove_ensemble(uid)
+        for uid in list(self._vs_profiles.keys()):
+            self.remove_vs_profile(uid)
 
     def select_curve(self, uid: str):
         """Programmatically select a curve in the tree."""
@@ -329,6 +388,14 @@ class CurveTreePanel(QWidget):
         if uid_str.startswith(_ENSEMBLE_PREFIX):
             ens_uid = uid_str.replace(_ENSEMBLE_PREFIX, "")
             self.ensemble_selected.emit(ens_uid)
+        elif uid_str.startswith(_PROFILE_PREFIX):
+            prof_uid = uid_str.replace(_PROFILE_PREFIX, "")
+            # Check if a specific layer child was clicked
+            layer_data = item.data(0, _ROLE_POINT_IDX)
+            layer_name = ""
+            if layer_data is not None and str(layer_data).startswith(_LAYER_PREFIX):
+                layer_name = str(layer_data).replace(_LAYER_PREFIX, "")
+            self.vs_profile_selected.emit(prof_uid, layer_name)
         else:
             self.curve_selected.emit(uid_str)
 
@@ -356,6 +423,23 @@ class CurveTreePanel(QWidget):
                 self.tree.blockSignals(False)
                 for layer_name in ("median", "percentile", "envelope", "individual"):
                     self.ensemble_layer_toggled.emit(ens_uid, layer_name, visible)
+            return
+
+        # Vs Profile items
+        if uid_str.startswith(_PROFILE_PREFIX):
+            prof_uid = uid_str.replace(_PROFILE_PREFIX, "")
+            layer_data = item.data(0, _ROLE_POINT_IDX)
+            if layer_data is not None and str(layer_data).startswith(_LAYER_PREFIX):
+                layer_name = str(layer_data).replace(_LAYER_PREFIX, "")
+                self.vs_profile_layer_toggled.emit(prof_uid, layer_name, visible)
+            else:
+                self.tree.blockSignals(True)
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    child.setCheckState(0, item.checkState(0))
+                self.tree.blockSignals(False)
+                for layer_name in ("median", "percentile", "individual", "sigma"):
+                    self.vs_profile_layer_toggled.emit(prof_uid, layer_name, visible)
             return
 
         # Regular curve items
@@ -405,6 +489,18 @@ class CurveTreePanel(QWidget):
                             lambda checked, u=ens_uid, k=key:
                                 self.ensemble_subplot_changed.emit(u, k)
                         )
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+            return
+
+        # Vs Profile context menu
+        if str(uid).startswith(_PROFILE_PREFIX):
+            prof_uid = str(uid).replace(_PROFILE_PREFIX, "")
+            layer_data = item.data(0, _ROLE_POINT_IDX)
+            if layer_data is None:
+                remove_action = menu.addAction("Remove Vs Profile")
+                remove_action.triggered.connect(
+                    lambda: self.remove_vs_profile_requested.emit(prof_uid)
+                )
             menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
 

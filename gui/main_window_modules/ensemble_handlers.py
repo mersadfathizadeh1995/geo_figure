@@ -96,16 +96,14 @@ class EnsembleHandlersMixin:
 
     def _on_new_dc_compare_sheet(self):
         """Create a new sheet pre-configured for DC Compare work."""
-        from geo_figure.gui.canvas.plot_canvas import LAYOUT_SINGLE
-        # Create new sheet
+        from geo_figure.gui.canvas.plot_canvas import LAYOUT_COMBINED
         idx = self.sheet_tabs.count()
-        self.sheet_tabs.addTab(
-            self.sheet_tabs._create_canvas(), f"DC Compare {idx}"
-        )
-        self.sheet_tabs.setCurrentIndex(idx)
-        self._ensure_sheet_data(idx)
-        canvas = self.sheet_tabs.get_current_canvas()
-        canvas.set_layout_mode(LAYOUT_SINGLE)
+        name = f"DC Compare {idx}"
+        canvas = self.sheet_tabs.add_sheet(name)
+        new_idx = self.sheet_tabs.indexOf(canvas)
+        self.sheet_tabs.setCurrentIndex(new_idx)
+        self._ensure_sheet_data(new_idx)
+        canvas.set_layout_mode(LAYOUT_COMBINED)
         self.log_panel.log_info("Created DC Compare sheet")
 
     def _on_compute_misfit(self):
@@ -223,3 +221,137 @@ class EnsembleHandlersMixin:
         self._ensembles[uid] = ens
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.update_ensemble(ens)
+
+    # ── Vs Profile handlers ──────────────────────────────────
+
+    def _on_vs_profile(self):
+        """Open Vs Profile dialog to extract profiles from .report."""
+        from geo_figure.gui.dialogs.vs_profile_dialog import VsProfileDialog
+        dlg = VsProfileDialog(self)
+        dlg.extraction_complete.connect(self._on_profile_extraction_complete)
+        dlg.exec()
+
+    def _on_profile_extraction_complete(self, profiles, params):
+        """Handle completed profile extraction -- create Vs Profile sheet + render."""
+        from geo_figure.core.profile_processing import process_profiles
+        from geo_figure.core.models import VsProfileData
+        from geo_figure.gui.canvas.plot_canvas import LAYOUT_VS_PROFILE
+
+        profile_type = params.get("profile_type", "vs")
+        depth_max = params.get("depth_max", 200.0)
+
+        ptype_label = {"vs": "Vs", "vp": "Vp", "rho": "Density"}.get(profile_type, "Vs")
+
+        try:
+            results = process_profiles(profiles, dz=0.1, z_max=depth_max)
+        except Exception as e:
+            self.log_panel.log_error(f"Profile processing failed: {e}")
+            return
+
+        # Auto-detect actual data depth from profiles
+        data_depth = 0.0
+        for d, v in profiles:
+            finite = d[np.isfinite(d) & (d > 0)]
+            if len(finite) > 0:
+                data_depth = max(data_depth, float(np.max(finite)))
+        if data_depth <= 0:
+            data_depth = depth_max
+
+        # Create a dedicated Vs Profile sheet with the 2-panel layout
+        sheet_name = f"{ptype_label} Profile"
+        canvas = self.sheet_tabs.add_sheet(sheet_name)
+        new_idx = self.sheet_tabs.indexOf(canvas)
+        self.sheet_tabs.setCurrentIndex(new_idx)
+        self._ensure_sheet_data(new_idx)
+
+        # Set layout to LAYOUT_VS_PROFILE (Vs | sigma_ln side by side)
+        canvas.set_layout_mode(LAYOUT_VS_PROFILE)
+
+        prof = VsProfileData(
+            name=sheet_name,
+            profile_type=profile_type,
+            n_profiles=len(profiles),
+            subplot_key="vs_profile",
+            profiles=profiles,
+            depth_grid=results["depth_grid"],
+            median=results["median"],
+            p_low=results["p_low"],
+            p_high=results["p_high"],
+            sigma_ln=results["sigma_ln"],
+            median_depth_paired=results.get("median_depth_paired"),
+            median_vel_paired=results.get("median_vel_paired"),
+            vs30_values=results.get("vs30_values"),
+            vs100_values=results.get("vs100_values"),
+            depth_max_plot=data_depth,
+        )
+
+        self._vs_profiles[prof.uid] = prof
+        canvas.add_vs_profile(prof)
+        self.curve_tree.add_vs_profile(prof)
+
+        # Save CSV to project dir
+        self._save_profile_csv(prof)
+
+        vs30_str = f"Vs30={prof.vs30_mean:.1f} m/s" if prof.vs30_mean else ""
+        self.log_panel.log_success(
+            f"{ptype_label} Profile: {len(profiles)} models extracted. {vs30_str}"
+        )
+
+    def _save_profile_csv(self, prof):
+        """Save profile statistics CSV to project/theoretical/ dir."""
+        from pathlib import Path
+        project_dir = getattr(self, '_project_dir', None)
+        if project_dir is None or prof.depth_grid is None:
+            return
+        theo_dir = Path(project_dir) / "theoretical"
+        theo_dir.mkdir(parents=True, exist_ok=True)
+        name = prof.display_name.replace(" ", "_").replace("/", "_")
+        header = "Depth_m,Median,P_low,P_high,Sigma_ln"
+        lines = [header]
+        for i in range(len(prof.depth_grid)):
+            row = (
+                f"{prof.depth_grid[i]:.3f},"
+                f"{prof.median[i]:.4f},"
+                f"{prof.p_low[i]:.4f},"
+                f"{prof.p_high[i]:.4f},"
+                f"{prof.sigma_ln[i]:.6f}"
+            )
+            lines.append(row)
+        fpath = theo_dir / f"{name}_stats.csv"
+        fpath.write_text("\n".join(lines), encoding="utf-8")
+        self.log_panel.log_info(f"Saved: {fpath.name}")
+
+    def _on_vs_profile_layer_toggled(self, uid: str, layer_name: str, visible: bool):
+        """Toggle visibility of a Vs profile layer."""
+        prof = self._vs_profiles.get(uid)
+        if not prof:
+            return
+        layer = getattr(prof, f"{layer_name}_layer", None)
+        if layer:
+            layer.visible = visible
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.set_vs_profile_layer_visible(uid, layer_name, visible)
+
+    def _on_remove_vs_profile(self, uid: str):
+        """Remove a Vs profile from data and canvas."""
+        if uid in self._vs_profiles:
+            del self._vs_profiles[uid]
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.remove_vs_profile(uid)
+        self.curve_tree.remove_vs_profile(uid)
+        self.log_panel.log_info("Removed Vs profile")
+
+    def _on_vs_profile_selected(self, uid: str, layer_name: str = ""):
+        """Handle Vs profile selection from tree."""
+        prof = self._vs_profiles.get(uid)
+        if prof:
+            self.properties.show_vs_profile(uid, prof, layer_name or None)
+            self.status_bar.showMessage(
+                f"Selected: {prof.display_name} | {prof.n_profiles} models"
+            )
+
+    def _on_vs_profile_updated(self, uid: str, prof):
+        """Handle Vs profile display settings change from properties panel."""
+        self._vs_profiles[uid] = prof
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas._rebuild_vs_profile(uid)
