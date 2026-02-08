@@ -92,6 +92,7 @@ class StatePersistenceMixin:
         vel_unit = sd.get('velocity_unit', 'metric')
         curves = list(sd.get('curves', {}).values())
         ensembles = list(sd.get('ensembles', {}).values())
+        vs_profiles = list(sd.get('vs_profiles', {}).values())
         return FigureState(
             layout_mode=cfg["layout_mode"],
             grid_rows=cfg["grid_rows"],
@@ -102,6 +103,7 @@ class StatePersistenceMixin:
             subplot_types=cfg.get("subplot_types", {}),
             curves=curves,
             ensembles=ensembles,
+            vs_profiles=vs_profiles,
             theme=theme,
             velocity_unit=vel_unit,
         )
@@ -126,6 +128,7 @@ class StatePersistenceMixin:
             subplot_types=cfg.get("subplot_types", {}),
             curves=list(self._curves.values()),
             ensembles=list(self._ensembles.values()),
+            vs_profiles=list(self._vs_profiles.values()),
             theme=theme,
             velocity_unit=vel_unit,
         )
@@ -134,6 +137,22 @@ class StatePersistenceMixin:
     def figure_state(self):
         """Current figure state (always up-to-date, rebuilt on access)."""
         return self.capture_figure_state()
+
+    def _on_open_studio(self):
+        """Open Matplotlib Studio for the current sheet."""
+        from PySide6.QtCore import Qt as QtCore_Qt
+        from geo_figure.gui.studio.studio_window import StudioWindow
+        try:
+            fig_state = self.capture_figure_state()
+            sheet_name = self.sheet_tabs.tabText(self._current_sheet_idx)
+            studio = StudioWindow(fig_state, sheet_name=sheet_name, parent=self)
+            studio.setAttribute(QtCore_Qt.WA_DeleteOnClose)
+            studio.show()
+            self.log_panel.log_info(
+                f"Matplotlib Studio opened for '{sheet_name}'"
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Studio Error", str(e))
 
     def _on_settings(self):
         """Open settings dialog."""

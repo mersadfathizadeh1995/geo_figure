@@ -109,6 +109,10 @@ class MenuSetupMixin:
         analysis_menu.addSeparator()
         vs_profile_action = analysis_menu.addAction("Extract Vs Profile...")
         vs_profile_action.triggered.connect(self._on_vs_profile)
+        analysis_menu.addSeparator()
+        studio_action = analysis_menu.addAction("Render to Matplotlib...")
+        studio_action.setShortcut("Ctrl+M")
+        studio_action.triggered.connect(self._on_open_studio)
 
         # Help menu
         help_menu = menubar.addMenu("&Help")
@@ -148,3 +152,9 @@ class MenuSetupMixin:
         new_tab = toolbar.addAction("New Sheet")
         new_tab.setToolTip("Add new sheet (Ctrl+T)")
         new_tab.triggered.connect(self._on_new_sheet)
+
+        toolbar.addSeparator()
+
+        studio_act = toolbar.addAction("Matplotlib")
+        studio_act.setToolTip("Render current sheet in Matplotlib Studio (Ctrl+M)")
+        studio_act.triggered.connect(self._on_open_studio)

@@ -314,6 +314,7 @@ class FigureState:
     # Data (references to live objects; renderer iterates these)
     curves: List[CurveData] = field(default_factory=list)
     ensembles: List[EnsembleData] = field(default_factory=list)
+    vs_profiles: List["VsProfileData"] = field(default_factory=list)
 
     # Display
     theme: str = "light"
@@ -326,6 +327,10 @@ class FigureState:
     def ensembles_for_subplot(self, key: str) -> List[EnsembleData]:
         """Return ensembles assigned to a specific subplot."""
         return [e for e in self.ensembles if e.subplot_key == key]
+
+    def vs_profiles_for_subplot(self, key: str) -> List["VsProfileData"]:
+        """Return Vs profiles assigned to a specific subplot."""
+        return [p for p in self.vs_profiles if p.subplot_key == key]
 
     @property
     def subplot_keys(self) -> List[str]:
@@ -343,6 +348,7 @@ class FigureState:
             "subplot_names": dict(self.subplot_names),
             "n_curves": len(self.curves),
             "n_ensembles": len(self.ensembles),
+            "n_vs_profiles": len(self.vs_profiles),
             "theme": self.theme,
             "velocity_unit": self.velocity_unit,
             "subplot_types": dict(self.subplot_types),
@@ -363,6 +369,7 @@ class FigureState:
             "velocity_unit": self.velocity_unit,
             "curves": [],
             "ensembles": [],
+            "vs_profiles": [],
         }
         for c in self.curves:
             data["curves"].append({
@@ -392,6 +399,19 @@ class FigureState:
                 "individual_freqs": e.individual_freqs,
                 "individual_vels": e.individual_vels,
             })
+        for p in self.vs_profiles:
+            data["vs_profiles"].append({
+                "uid": p.uid, "name": p.name, "custom_name": p.custom_name,
+                "profile_type": p.profile_type, "subplot_key": p.subplot_key,
+                "profiles": p.profiles, "depth_grid": p.depth_grid,
+                "median": p.median, "p_low": p.p_low, "p_high": p.p_high,
+                "sigma_ln": p.sigma_ln,
+                "median_depth_paired": p.median_depth_paired,
+                "median_vel_paired": p.median_vel_paired,
+                "vs30_values": p.vs30_values, "vs100_values": p.vs100_values,
+                "n_profiles": p.n_profiles, "depth_max_plot": p.depth_max_plot,
+                "max_individual": p.max_individual,
+            })
         with open(filepath, "wb") as f:
             pickle.dump(data, f)
 
@@ -415,6 +435,13 @@ class FigureState:
                 if k not in ("uid", "name") and hasattr(e, k):
                     setattr(e, k, v)
             ensembles.append(e)
+        vs_profiles = []
+        for pd in data.get("vs_profiles", []):
+            p = VsProfileData(uid=pd.get("uid", ""), name=pd.get("name", ""))
+            for k, v in pd.items():
+                if k not in ("uid", "name") and hasattr(p, k):
+                    setattr(p, k, v)
+            vs_profiles.append(p)
         return cls(
             layout_mode=data["layout_mode"],
             grid_rows=data["grid_rows"],
@@ -425,6 +452,7 @@ class FigureState:
             subplot_types=data.get("subplot_types", {}),
             curves=curves,
             ensembles=ensembles,
+            vs_profiles=vs_profiles,
             theme=data.get("theme", "light"),
             velocity_unit=data.get("velocity_unit", "metric"),
         )
