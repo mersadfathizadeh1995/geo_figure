@@ -800,6 +800,10 @@ class PlotCanvas(QWidget):
             items['scatter'].setVisible(visible)
         if items.get('error'):
             items['error'].setVisible(visible)
+        # Refit auto-range to visible data only
+        plot = items.get('plot')
+        if plot:
+            plot.vb.updateAutoRange()
 
     def highlight_curve(self, uid: str, selected: bool):
         """Highlight or unhighlight a curve."""
@@ -869,6 +873,14 @@ class PlotCanvas(QWidget):
             env_fill.setVisible(env.visible)
             plot.addItem(env_fill)
             env_items.append(env_fill)
+            # Ghost legend entry for envelope
+            env_ghost = pg.PlotDataItem(
+                [], [], pen=pg.mkPen(QColor(env.color), width=6),
+                name="Theoretical Range",
+            )
+            env_ghost.setVisible(env.visible)
+            plot.addItem(env_ghost)
+            env_items.append(env_ghost)
         layers["envelope"] = env_items
 
         # 2. Percentile band fill
@@ -885,6 +897,14 @@ class PlotCanvas(QWidget):
             pct_fill.setVisible(pct.visible)
             plot.addItem(pct_fill)
             pct_items.append(pct_fill)
+            # Ghost legend entry for percentile
+            pct_ghost = pg.PlotDataItem(
+                [], [], pen=pg.mkPen(QColor(pct.color), width=6),
+                name="16-84 Percentile",
+            )
+            pct_ghost.setVisible(pct.visible)
+            plot.addItem(pct_ghost)
+            pct_items.append(pct_ghost)
         layers["percentile"] = pct_items
 
         # 3. Individual curves (spaghetti)
@@ -905,6 +925,15 @@ class PlotCanvas(QWidget):
                 line.setVisible(ind.visible)
                 plot.addItem(line)
                 ind_items.append(line)
+            # Ghost legend entry for individual profiles
+            n_total = len(ensemble.individual_freqs)
+            ind_ghost = pg.PlotDataItem(
+                [], [], pen=pg.mkPen(QColor(ind.color), width=ind.line_width),
+                name=f"{n_total} Profiles",
+            )
+            ind_ghost.setVisible(ind.visible)
+            plot.addItem(ind_ghost)
+            ind_items.append(ind_ghost)
         layers["individual"] = ind_items
 
         # 4. Median line (on top, bold)
@@ -912,9 +941,10 @@ class PlotCanvas(QWidget):
         med_items = []
         if ensemble.median is not None:
             med_pen = pg.mkPen(QColor(med.color), width=med.line_width)
+            med_label = f"Median ({ensemble.display_name})" if ensemble.display_name else "Median"
             med_line = plot.plot(
                 log_freq, ensemble.median * vf, pen=med_pen,
-                name=ensemble.display_name,
+                name=med_label,
             )
             med_line.setVisible(med.visible)
             med_items.append(med_line)
@@ -934,6 +964,10 @@ class PlotCanvas(QWidget):
         items = info["layers"].get(layer_name, [])
         for item in items:
             item.setVisible(visible)
+        # Refit auto-range to visible data only
+        plot = info.get("plot")
+        if plot:
+            plot.vb.updateAutoRange()
 
     def update_ensemble(self, ensemble: EnsembleData):
         """Re-render an ensemble (call after changing layer styles)."""

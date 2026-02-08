@@ -1,7 +1,7 @@
 """Per-subplot axis settings panel — limits, scale, ticks, grid."""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QDoubleSpinBox, QComboBox,
-    QCheckBox, QLabel, QGroupBox, QHBoxLayout,
+    QCheckBox, QLabel, QGroupBox, QHBoxLayout, QLineEdit, QPushButton,
 )
 from PySide6.QtCore import Signal
 from geo_figure.gui.studio.models import AxisConfig, GridConfig, TickConfig
@@ -11,6 +11,7 @@ class AxisPanel(QWidget):
     """Per-subplot axis configuration controls."""
 
     changed = Signal()
+    use_canvas_limits = Signal(str)  # emits current subplot key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -38,6 +39,13 @@ class AxisPanel(QWidget):
         limits_form.addRow(self.auto_x)
         limits_form.addRow(self.auto_y)
 
+        self.use_canvas_btn = QPushButton("Use Current View Limits")
+        self.use_canvas_btn.setToolTip(
+            "Set axis limits to match the current matplotlib preview view"
+        )
+        self.use_canvas_btn.clicked.connect(self._on_use_canvas_limits)
+        limits_form.addRow(self.use_canvas_btn)
+
         self.x_min = self._limit_spin(0.0)
         self.x_max = self._limit_spin(100.0)
         row_x = QHBoxLayout()
@@ -57,6 +65,39 @@ class AxisPanel(QWidget):
         limits_form.addRow(row_y)
 
         layout.addWidget(limits_grp)
+
+        # -- Labels group --
+        labels_grp = QGroupBox("Labels")
+        labels_form = QFormLayout(labels_grp)
+        labels_form.setSpacing(4)
+
+        self.show_x_label = QCheckBox("Show X Axis Label")
+        self.show_x_label.setChecked(True)
+        labels_form.addRow(self.show_x_label)
+
+        self.show_y_label = QCheckBox("Show Y Axis Label")
+        self.show_y_label.setChecked(True)
+        labels_form.addRow(self.show_y_label)
+
+        self.freq_tick_combo = QComboBox()
+        self.freq_tick_combo.addItems([
+            "Default (Log Scale)",
+            "Clean Values (1,2,5,10...)",
+            "Data Points (sampled)",
+            "Custom",
+        ])
+        labels_form.addRow("Freq. Ticks:", self.freq_tick_combo)
+
+        self.freq_tick_custom = QLineEdit()
+        self.freq_tick_custom.setPlaceholderText("e.g. 1, 5, 10, 50, 100")
+        self.freq_tick_custom.setVisible(False)
+        labels_form.addRow("Custom Values:", self.freq_tick_custom)
+        self._freq_custom_label = labels_form.labelForField(self.freq_tick_custom)
+        if self._freq_custom_label:
+            self._freq_custom_label.setVisible(False)
+        self.freq_tick_combo.currentIndexChanged.connect(self._on_freq_mode)
+
+        layout.addWidget(labels_grp)
 
         # -- Scale group --
         scale_grp = QGroupBox("Scale")
@@ -123,19 +164,37 @@ class AxisPanel(QWidget):
         grid_form.addRow("Opacity:", self.grid_alpha)
 
         layout.addWidget(grid_grp)
+
+        # -- Axis Linking group --
+        link_grp = QGroupBox("Axis Linking")
+        link_form = QFormLayout(link_grp)
+        link_form.setSpacing(4)
+
+        self.link_x_combo = QComboBox()
+        self.link_x_combo.addItem("(None)", "")
+        link_form.addRow("Link X to:", self.link_x_combo)
+
+        self.link_y_combo = QComboBox()
+        self.link_y_combo.addItem("(None)", "")
+        link_form.addRow("Link Y to:", self.link_y_combo)
+
+        layout.addWidget(link_grp)
         layout.addStretch()
 
         # Connect signals
         for w in (self.auto_x, self.auto_y, self.invert_y,
                   self.show_top, self.show_right, self.show_minor,
-                  self.grid_show):
+                  self.grid_show, self.show_x_label, self.show_y_label):
             w.stateChanged.connect(self.changed)
         for w in (self.x_min, self.x_max, self.y_min, self.y_max,
                   self.grid_alpha):
             w.valueChanged.connect(self.changed)
         for w in (self.x_scale, self.y_scale, self.tick_dir,
-                  self.grid_which, self.grid_style):
+                  self.grid_which, self.grid_style,
+                  self.link_x_combo, self.link_y_combo,
+                  self.freq_tick_combo):
             w.currentIndexChanged.connect(self.changed)
+        self.freq_tick_custom.editingFinished.connect(self.changed)
 
         self._subplot_keys = []
         self._current_key = ""
@@ -149,6 +208,40 @@ class AxisPanel(QWidget):
         spin.setDecimals(2)
         return spin
 
+    _FREQ_MODES = ["default", "clean", "data_sampled", "custom"]
+
+    def _on_freq_mode(self, idx):
+        """Show/hide custom input based on freq tick mode."""
+        is_custom = (idx == 3)
+        self.freq_tick_custom.setVisible(is_custom)
+        if self._freq_custom_label:
+            self._freq_custom_label.setVisible(is_custom)
+
+    def set_canvas_ranges(self, canvas_ranges: dict):
+        """Store initial canvas ranges (unused now — kept for API compat)."""
+        pass
+
+    def _on_use_canvas_limits(self):
+        """Emit signal so studio can read current matplotlib axes limits."""
+        if self._current_key:
+            self.use_canvas_limits.emit(self._current_key)
+
+    def apply_view_limits(self, x_range, y_range):
+        """Set the limit spinboxes from external (xlim, ylim) tuples.
+
+        Called by the studio after reading the matplotlib axes.
+        """
+        self.blockSignals(True)
+        self.auto_x.setChecked(False)
+        self.auto_y.setChecked(False)
+        self.x_min.setValue(x_range[0])
+        self.x_max.setValue(x_range[1])
+        self.y_min.setValue(y_range[0])
+        self.y_max.setValue(y_range[1])
+        self.blockSignals(False)
+        self._save_current()
+        self.changed.emit()
+
     def set_subplots(self, subplot_info: list, settings):
         """Populate subplot selector. subplot_info = [(key, name), ...]."""
         self._settings = settings
@@ -159,6 +252,21 @@ class AxisPanel(QWidget):
             label = name if name else key
             self.subplot_combo.addItem(label, key)
         self.subplot_combo.blockSignals(False)
+
+        # Populate link combos with all subplot options
+        self.link_x_combo.blockSignals(True)
+        self.link_y_combo.blockSignals(True)
+        self.link_x_combo.clear()
+        self.link_y_combo.clear()
+        self.link_x_combo.addItem("(None)", "")
+        self.link_y_combo.addItem("(None)", "")
+        for key, name in subplot_info:
+            label = name if name else key
+            self.link_x_combo.addItem(label, key)
+            self.link_y_combo.addItem(label, key)
+        self.link_x_combo.blockSignals(False)
+        self.link_y_combo.blockSignals(False)
+
         if self._subplot_keys:
             self._load_axis_config(self._subplot_keys[0])
 
@@ -208,6 +316,16 @@ class AxisPanel(QWidget):
         if idx >= 0:
             self.grid_style.setCurrentIndex(idx)
         self.grid_alpha.setValue(acfg.grid.alpha)
+        self.show_x_label.setChecked(acfg.show_x_label)
+        self.show_y_label.setChecked(acfg.show_y_label)
+        mode_idx = self._FREQ_MODES.index(acfg.freq_tick_mode) if acfg.freq_tick_mode in self._FREQ_MODES else 0
+        self.freq_tick_combo.setCurrentIndex(mode_idx)
+        self.freq_tick_custom.setText(acfg.freq_tick_custom)
+        self._on_freq_mode(mode_idx)
+        link_x_idx = self.link_x_combo.findData(acfg.link_x_to)
+        self.link_x_combo.setCurrentIndex(max(link_x_idx, 0))
+        link_y_idx = self.link_y_combo.findData(acfg.link_y_to)
+        self.link_y_combo.setCurrentIndex(max(link_y_idx, 0))
         self.blockSignals(False)
 
     def _save_current(self):
@@ -235,6 +353,13 @@ class AxisPanel(QWidget):
         acfg.grid.which = self.grid_which.currentText()
         acfg.grid.linestyle = self.grid_style.currentText()
         acfg.grid.alpha = self.grid_alpha.value()
+        acfg.show_x_label = self.show_x_label.isChecked()
+        acfg.show_y_label = self.show_y_label.isChecked()
+        idx = self.freq_tick_combo.currentIndex()
+        acfg.freq_tick_mode = self._FREQ_MODES[idx] if idx < len(self._FREQ_MODES) else "default"
+        acfg.freq_tick_custom = self.freq_tick_custom.text().strip()
+        acfg.link_x_to = self.link_x_combo.currentData() or ""
+        acfg.link_y_to = self.link_y_combo.currentData() or ""
 
     def sync_all(self):
         """Save the currently shown axis config."""

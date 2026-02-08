@@ -235,7 +235,9 @@ class EnsembleHandlersMixin:
         """Handle completed profile extraction -- create Vs Profile sheet + render."""
         from geo_figure.core.profile_processing import process_profiles
         from geo_figure.core.models import VsProfileData
-        from geo_figure.gui.canvas.plot_canvas import LAYOUT_VS_PROFILE
+        from geo_figure.gui.canvas.plot_canvas import (
+            LAYOUT_VS_PROFILE, LAYOUT_GRID,
+        )
 
         profile_type = params.get("profile_type", "vs")
         depth_max = params.get("depth_max", 200.0)
@@ -257,21 +259,36 @@ class EnsembleHandlersMixin:
         if data_depth <= 0:
             data_depth = depth_max
 
-        # Create a dedicated Vs Profile sheet with the 2-panel layout
-        sheet_name = f"{ptype_label} Profile"
-        canvas = self.sheet_tabs.add_sheet(sheet_name)
-        new_idx = self.sheet_tabs.indexOf(canvas)
-        self.sheet_tabs.setCurrentIndex(new_idx)
-        self._ensure_sheet_data(new_idx)
+        # Determine where to place the Vs profile
+        canvas = self.sheet_tabs.get_current_canvas()
+        target_key = "vs_profile"
+        use_existing = False
 
-        # Set layout to LAYOUT_VS_PROFILE (Vs | sigma_ln side by side)
-        canvas.set_layout_mode(LAYOUT_VS_PROFILE)
+        if canvas and canvas._layout_mode == LAYOUT_GRID:
+            # Use the active (selected) subplot in the current grid
+            active = canvas.active_subplot
+            # Skip sigma companion keys
+            if active and not active.endswith("_sigma"):
+                target_key = active
+                use_existing = True
+                # Convert the cell to vs_profile type and rebuild
+                if canvas._subplot_types.get(active) != "vs_profile":
+                    canvas.set_subplot_type(active, "vs_profile")
+
+        if not use_existing:
+            # Create a dedicated Vs Profile sheet with the 2-panel layout
+            sheet_name = f"{ptype_label} Profile"
+            canvas = self.sheet_tabs.add_sheet(sheet_name)
+            new_idx = self.sheet_tabs.indexOf(canvas)
+            self.sheet_tabs.setCurrentIndex(new_idx)
+            self._ensure_sheet_data(new_idx)
+            canvas.set_layout_mode(LAYOUT_VS_PROFILE)
 
         prof = VsProfileData(
-            name=sheet_name,
+            name=f"{ptype_label} Profile",
             profile_type=profile_type,
             n_profiles=len(profiles),
-            subplot_key="vs_profile",
+            subplot_key=target_key,
             profiles=profiles,
             depth_grid=results["depth_grid"],
             median=results["median"],

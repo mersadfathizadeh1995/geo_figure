@@ -34,7 +34,6 @@ class MplRenderer:
         state: FigureState,
         settings: StudioSettings,
         fig: Optional[Figure] = None,
-        preview: bool = False,
     ) -> Figure:
         """Render the entire figure.
 
@@ -46,8 +45,8 @@ class MplRenderer:
             All visual settings (typography, axis, legend, etc.).
         fig : Figure, optional
             Existing figure to render into. Created if None.
-        preview : bool
-            If True, use screen-friendly DPI (100) instead of export DPI.
+            The caller is responsible for setting size_inches and DPI
+            before passing the figure.
 
         Returns
         -------
@@ -60,32 +59,28 @@ class MplRenderer:
         # Apply global rcParams
         self._apply_rcparams()
 
-        # Use low DPI for preview (screen), high DPI only for export
-        render_dpi = 100 if preview else settings.figure.dpi
-
-        # Create or clear figure
         if fig is None:
             fig = Figure(
                 figsize=(settings.figure.width, settings.figure.height),
-                dpi=render_dpi,
+                dpi=settings.figure.dpi,
                 facecolor=settings.figure.facecolor,
             )
         else:
             fig.clear()
-            fig.set_size_inches(settings.figure.width, settings.figure.height)
-            fig.set_dpi(render_dpi)
             fig.set_facecolor(settings.figure.facecolor)
 
         # Build subplots based on layout_mode
         axes_map = self._create_subplots(fig)
+        self._axes_map = axes_map
 
         # Render data into each subplot
         self._render_all_subplots(axes_map)
 
+        # Post-process: linked axes, frequency ticks, label visibility
+        self._post_process(axes_map)
+
         # Apply layout — adjust margins for legend placement
         if settings.legend.outside:
-            # Shrink plot area to make room for outside legend on the right
-            # Use a generous margin; bbox_inches='tight' on export trims excess
             fig.subplots_adjust(right=0.75)
         if settings.figure.tight_layout and not settings.legend.outside:
             fig.tight_layout()
@@ -118,12 +113,16 @@ class MplRenderer:
         s = self._settings.figure
 
         # Convert inch margins to figure fractions
-        left = s.margin_left / s.width
-        right = 1.0 - s.margin_right / s.width
-        bottom = s.margin_bottom / s.height
-        top = 1.0 - s.margin_top / s.height
-        hspace = s.hspace / s.height if s.height > 0 else 0.2
-        wspace = s.vspace / s.width if s.width > 0 else 0.2
+        w = max(s.width, 0.1)
+        h = max(s.height, 0.1)
+        left = s.margin_left / w
+        right = 1.0 - s.margin_right / w
+        bottom = s.margin_bottom / h
+        top = 1.0 - s.margin_top / h
+
+        # Available plot area in inches
+        plot_h = max((top - bottom) * h, 0.1)
+        plot_w = max((right - left) * w, 0.1)
 
         axes = {}
 
@@ -132,16 +131,24 @@ class MplRenderer:
                 fig, left, right, top, bottom
             )
         elif st.layout_mode == "split_wave":
+            avg_w = plot_w / 2.0
+            ws = s.vspace / avg_w if avg_w > 0 else 0.2
             gs = GridSpec(
                 1, 2, figure=fig,
                 left=left, right=right, bottom=bottom, top=top,
-                wspace=wspace,
+                wspace=ws,
             )
             axes["rayleigh"] = fig.add_subplot(gs[0, 0])
             axes["love"] = fig.add_subplot(gs[0, 1])
         elif st.layout_mode == "grid":
+            rows = max(st.grid_rows, 1)
+            cols = max(st.grid_cols, 1)
+            avg_h = plot_h / rows
+            avg_w = plot_w / cols
+            hs = s.hspace / avg_h if avg_h > 0 else 0.2
+            ws = s.vspace / avg_w if avg_w > 0 else 0.2
             axes = self._create_grid_layout(
-                fig, left, right, top, bottom, hspace, wspace
+                fig, left, right, top, bottom, hs, ws
             )
         else:
             # Combined — single subplot
@@ -185,7 +192,8 @@ class MplRenderer:
             col_map[c] = actual_cols
             key = f"cell_0_{c}"
             if stypes.get(key) == "vs_profile":
-                width_ratios.extend([3, 1])
+                vs_r, sig_r = self._settings.vs_width_ratios
+                width_ratios.extend([vs_r, sig_r])
                 actual_cols += 2
             else:
                 width_ratios.append(1)
@@ -222,7 +230,7 @@ class MplRenderer:
         s = self._settings
 
         for key, ax in axes_map.items():
-            if key.endswith("_sigma"):
+            if key.endswith("_sigma") or key == "sigma_ln":
                 continue  # handled by vs_profile rendering
 
             cell_type = st.subplot_types.get(key, "dc")
@@ -277,11 +285,28 @@ class MplRenderer:
         ax.set_ylabel(ylabel, fontsize=s.typography.axis_label_size,
                       fontweight=s.typography.font_weight)
 
-        # Axis limits
-        if not acfg.auto_x and acfg.x_min is not None and acfg.x_max is not None:
-            ax.set_xlim(acfg.x_min, acfg.x_max)
-        if not acfg.auto_y and acfg.y_min is not None and acfg.y_max is not None:
-            ax.set_ylim(acfg.y_min, acfg.y_max)
+        # Axis limits — compute from visible data when auto
+        bounds = self._compute_dc_visible_bounds(subplot_key)
+        if acfg.auto_x:
+            if bounds:
+                xmin, xmax = bounds[0], bounds[1]
+                if xmin > 0 and xmax > xmin:
+                    lmin = np.log10(xmin)
+                    lmax = np.log10(xmax)
+                    pad = (lmax - lmin) * 0.05
+                    ax.set_xlim(10 ** (lmin - pad), 10 ** (lmax + pad))
+        else:
+            if acfg.x_min is not None and acfg.x_max is not None:
+                ax.set_xlim(acfg.x_min, acfg.x_max)
+
+        if acfg.auto_y:
+            if bounds:
+                ymin, ymax = bounds[2], bounds[3]
+                yr = (ymax - ymin) or 1.0
+                ax.set_ylim(ymin - yr * 0.05, ymax + yr * 0.05)
+        else:
+            if acfg.y_min is not None and acfg.y_max is not None:
+                ax.set_ylim(acfg.y_min, acfg.y_max)
 
         self._configure_ticks(ax, acfg)
         self._configure_grid(ax, acfg)
@@ -381,6 +406,7 @@ class MplRenderer:
             ax.fill_between(
                 freq, ens.envelope_min * vf, ens.envelope_max * vf,
                 color=c, edgecolor="k", linewidth=0.3, zorder=1,
+                label="Theoretical Range",
             )
 
         # 2. Percentile band
@@ -404,14 +430,20 @@ class MplRenderer:
                     ens.individual_vels[i] * vf,
                     color=c, linewidth=ind.line_width, zorder=1,
                 )
+            # Ghost legend entry for individual profile count
+            n_total = len(ens.individual_freqs)
+            ax.plot([], [], color=ind.color, linewidth=ind.line_width,
+                    alpha=ind.alpha / 255.0,
+                    label=f"{n_total} Profiles")
 
         # 4. Median (top, bold)
         med = ens.median_layer
         if med.visible and ens.median is not None:
+            median_label = f"Median ({ens.display_name})" if ens.display_name else "Median"
             ax.semilogx(
                 freq, ens.median * vf,
                 color=med.color, linewidth=med.line_width,
-                label=ens.display_name, zorder=5,
+                label=median_label, zorder=5,
             )
 
     # ── Vs Profile subplot rendering ──────────────────────────────
@@ -424,7 +456,6 @@ class MplRenderer:
         vel_unit = _VEL_UNIT.get(st.velocity_unit, "m/s")
 
         # Collect VsProfileData items for this subplot
-        # (vs_profiles are stored on FigureState but not in curves/ensembles)
         vs_profs = getattr(st, "vs_profiles", [])
         matching = [p for p in vs_profs if (
             p.subplot_key == subplot_key
@@ -432,8 +463,12 @@ class MplRenderer:
             or p.subplot_key == "main"
         )]
 
+        # Track whether any profile has sigma visible
+        any_sigma_visible = False
         for prof in matching:
             self._render_one_vs_profile(ax_vs, ax_sig, prof, vf, vel_unit)
+            if prof.sigma_layer.visible and prof.sigma_ln is not None:
+                any_sigma_visible = True
 
         # Configure Vs axis
         acfg = s.axis_for(subplot_key)
@@ -454,9 +489,12 @@ class MplRenderer:
         self._configure_grid(ax_vs, acfg)
         self._configure_legend(ax_vs, subplot_key)
 
-        # Configure sigma_ln axis
+        # Configure sigma_ln axis — hide entirely if no sigma data visible
         if ax_sig is not None:
-            self._configure_sigma_axis(ax_sig)
+            if any_sigma_visible:
+                self._configure_sigma_axis(ax_sig)
+            else:
+                ax_sig.set_visible(False)
 
     def _render_one_vs_profile(self, ax_vs, ax_sig, prof: VsProfileData,
                                 vf: float, vel_unit: str):
@@ -663,3 +701,176 @@ class MplRenderer:
             kwargs["loc"] = lc.location
 
         ax.legend(handles, labels, **kwargs)
+
+    # ── Post-processing ───────────────────────────────────────────
+
+    def _post_process(self, axes_map: Dict[str, object]):
+        """Apply linked axes, frequency ticks, and label visibility."""
+        s = self._settings
+
+        for key, ax in axes_map.items():
+            if key.endswith("_sigma"):
+                continue
+            acfg = s.axis_for(key)
+
+            # Link X axis to another subplot
+            if acfg.link_x_to and acfg.link_x_to in axes_map:
+                src_ax = axes_map[acfg.link_x_to]
+                ax.set_xlim(src_ax.get_xlim())
+
+            # Link Y axis to another subplot
+            if acfg.link_y_to and acfg.link_y_to in axes_map:
+                src_ax = axes_map[acfg.link_y_to]
+                ax.set_ylim(src_ax.get_ylim())
+
+            # Frequency tick modes
+            self._apply_freq_ticks(ax, acfg, key)
+
+            # Label visibility
+            if not acfg.show_x_label:
+                ax.set_xlabel("")
+            if not acfg.show_y_label:
+                ax.set_ylabel("")
+
+    def _apply_freq_ticks(self, ax, acfg, subplot_key: str):
+        """Apply frequency tick mode to x-axis."""
+        mode = acfg.freq_tick_mode
+        if mode == "default":
+            return  # keep matplotlib's default log ticks
+
+        xlim = ax.get_xlim()
+        xlo, xhi = max(xlim[0], 1e-6), max(xlim[1], 1e-6)
+
+        if mode == "clean":
+            # Nice round values appropriate for frequency axes
+            candidates = [
+                0.5, 1, 1.5, 2, 3, 4, 5, 7, 10, 15, 20, 30, 40, 50, 70,
+                100, 150, 200, 300, 500, 700, 1000, 1500, 2000, 3000, 5000,
+            ]
+            ticks = [v for v in candidates if xlo * 0.9 <= v <= xhi * 1.1]
+            if not ticks:
+                return
+        elif mode == "data_sampled":
+            all_freqs = self._collect_frequencies(subplot_key)
+            if not all_freqs:
+                return
+            # Sample ~10 evenly spaced values in log space
+            n_target = min(12, len(all_freqs))
+            if len(all_freqs) <= n_target:
+                ticks = all_freqs
+            else:
+                log_freqs = np.log10(all_freqs)
+                indices = np.round(
+                    np.linspace(0, len(log_freqs) - 1, n_target)
+                ).astype(int)
+                ticks = [all_freqs[i] for i in sorted(set(indices))]
+        elif mode == "custom":
+            ticks = self._parse_custom_ticks(acfg.freq_tick_custom)
+            if not ticks:
+                return
+        else:
+            return
+
+        ax.xaxis.set_major_locator(mtick.FixedLocator(ticks))
+        fmt = mtick.FuncFormatter(self._freq_label_formatter)
+        ax.xaxis.set_major_formatter(fmt)
+        ax.xaxis.set_minor_locator(mtick.NullLocator())
+
+    @staticmethod
+    def _freq_label_formatter(val, pos):
+        """Format frequency tick labels: integer if whole, else 1 decimal."""
+        if val <= 0:
+            return ""
+        if val == int(val):
+            return f"{int(val)}"
+        if val < 10:
+            return f"{val:.1f}"
+        return f"{val:.0f}"
+
+    @staticmethod
+    def _parse_custom_ticks(text: str) -> List[float]:
+        """Parse comma/space separated tick values."""
+        ticks = []
+        for part in text.replace(",", " ").split():
+            try:
+                v = float(part.strip())
+                if v > 0:
+                    ticks.append(v)
+            except ValueError:
+                continue
+        return sorted(ticks)
+
+    def _collect_frequencies(self, subplot_key: str) -> List[float]:
+        """Collect unique frequency values from visible curves in a subplot."""
+        freqs = set()
+        for c in self._state.curves:
+            if c.subplot_key == subplot_key and c.visible and c.has_data:
+                mask = c.point_mask if c.point_mask is not None else np.ones(
+                    len(c.frequency), dtype=bool)
+                for f in c.frequency[mask]:
+                    if np.isfinite(f) and f > 0:
+                        freqs.add(float(f))
+        return sorted(freqs)
+
+    def _compute_dc_visible_bounds(
+        self, subplot_key: str
+    ) -> Optional[Tuple[float, float, float, float]]:
+        """Compute (xmin, xmax, ymin, ymax) from visible data only."""
+        vf = self._vf
+        x_all: List[float] = []
+        y_all: List[float] = []
+
+        for c in self._state.curves:
+            if c.subplot_key != subplot_key or not c.visible or not c.has_data:
+                continue
+            mask = c.point_mask if c.point_mask is not None else np.ones(
+                len(c.frequency), dtype=bool)
+            f = c.frequency[mask]
+            v = c.velocity[mask] * vf
+            valid = np.isfinite(f) & (f > 0) & np.isfinite(v)
+            if np.any(valid):
+                x_all.extend(f[valid].tolist())
+                y_all.extend(v[valid].tolist())
+            # Include error bar extent
+            if (c.show_error_bars and c.stddev is not None
+                    and len(c.stddev) == len(c.frequency)):
+                sd = c.stddev[mask]
+                v_arr = c.velocity[mask] * vf
+                if c.stddev_type == "logstd":
+                    top = v_arr * np.exp(sd)
+                    bot = v_arr * np.exp(-sd)
+                else:
+                    top = v_arr + sd * vf
+                    bot = v_arr - sd * vf
+                valid2 = np.isfinite(top) & np.isfinite(bot)
+                if np.any(valid2):
+                    y_all.extend(top[valid2].tolist())
+                    y_all.extend(bot[valid2].tolist())
+
+        for e in self._state.ensembles:
+            if e.subplot_key != subplot_key or e.freq is None:
+                continue
+            freq = e.freq
+            if e.median_layer.visible and e.median is not None:
+                x_all.extend(freq.tolist())
+                y_all.extend((e.median * vf).tolist())
+            if e.envelope_layer.visible and e.envelope_min is not None:
+                x_all.extend(freq.tolist())
+                y_all.extend((e.envelope_min * vf).tolist())
+                y_all.extend((e.envelope_max * vf).tolist())
+            if e.percentile_layer.visible and e.p_low is not None:
+                x_all.extend(freq.tolist())
+                y_all.extend((e.p_low * vf).tolist())
+                y_all.extend((e.p_high * vf).tolist())
+
+        if not x_all or not y_all:
+            return None
+
+        xa = np.array(x_all)
+        ya = np.array(y_all)
+        vx = xa[np.isfinite(xa) & (xa > 0)]
+        vy = ya[np.isfinite(ya)]
+        if len(vx) == 0 or len(vy) == 0:
+            return None
+        return (float(vx.min()), float(vx.max()),
+                float(vy.min()), float(vy.max()))

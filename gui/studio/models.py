@@ -55,6 +55,12 @@ class AxisConfig:
     invert_y: bool = False
     x_label: str = ""
     y_label: str = ""
+    show_x_label: bool = True
+    show_y_label: bool = True
+    freq_tick_mode: str = "default"      # "default", "clean", "data_sampled", "custom"
+    freq_tick_custom: str = ""           # comma-separated values for "custom" mode
+    link_x_to: str = ""
+    link_y_to: str = ""
     ticks: TickConfig = field(default_factory=TickConfig)
     grid: GridConfig = field(default_factory=GridConfig)
 

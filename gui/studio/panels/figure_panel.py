@@ -66,14 +66,41 @@ class FigurePanel(QWidget):
         spacing_form.setSpacing(4)
 
         self.hspace_spin = self._margin_spin(0.40)
-        spacing_form.addRow("Horizontal:", self.hspace_spin)
+        spacing_form.addRow("Between Rows:", self.hspace_spin)
         self.vspace_spin = self._margin_spin(0.40)
-        spacing_form.addRow("Vertical:", self.vspace_spin)
+        spacing_form.addRow("Between Columns:", self.vspace_spin)
 
         self.tight_check = QCheckBox("Tight Layout")
         spacing_form.addRow(self.tight_check)
 
         layout.addWidget(spacing_grp)
+
+        # -- Vs Profile layout group (shown only when Vs data present) --
+        self._vs_grp = QGroupBox("Vs Profile Layout")
+        vs_form = QFormLayout(self._vs_grp)
+        vs_form.setSpacing(4)
+
+        self.vs_gap_spin = QDoubleSpinBox()
+        self.vs_gap_spin.setRange(0.0, 1.0)
+        self.vs_gap_spin.setValue(0.12)
+        self.vs_gap_spin.setSingleStep(0.02)
+        vs_form.addRow("Vs / Sigma Gap:", self.vs_gap_spin)
+
+        self.vs_ratio_spin = QDoubleSpinBox()
+        self.vs_ratio_spin.setRange(1.0, 10.0)
+        self.vs_ratio_spin.setValue(3.0)
+        self.vs_ratio_spin.setSingleStep(0.5)
+        vs_form.addRow("Vs Width Ratio:", self.vs_ratio_spin)
+
+        self.sig_ratio_spin = QDoubleSpinBox()
+        self.sig_ratio_spin.setRange(0.5, 5.0)
+        self.sig_ratio_spin.setValue(1.0)
+        self.sig_ratio_spin.setSingleStep(0.25)
+        vs_form.addRow("Sigma Width Ratio:", self.sig_ratio_spin)
+
+        self._vs_grp.setVisible(False)
+        layout.addWidget(self._vs_grp)
+
         layout.addStretch()
 
         # Connect all signals
@@ -82,6 +109,7 @@ class FigurePanel(QWidget):
             self.margin_left, self.margin_right,
             self.margin_top, self.margin_bottom,
             self.hspace_spin, self.vspace_spin,
+            self.vs_gap_spin, self.vs_ratio_spin, self.sig_ratio_spin,
         ):
             w.valueChanged.connect(self.changed)
         self.tight_check.stateChanged.connect(self.changed)
@@ -107,6 +135,14 @@ class FigurePanel(QWidget):
         cfg.vspace = self.vspace_spin.value()
         cfg.tight_layout = self.tight_check.isChecked()
 
+    def write_vs_to(self, settings):
+        """Write Vs Profile layout values into StudioSettings."""
+        settings.vs_wspace = self.vs_gap_spin.value()
+        settings.vs_width_ratios = (
+            self.vs_ratio_spin.value(),
+            self.sig_ratio_spin.value(),
+        )
+
     def read_from(self, cfg):
         """Populate controls from a FigureConfig."""
         self.blockSignals(True)
@@ -121,3 +157,15 @@ class FigurePanel(QWidget):
         self.vspace_spin.setValue(cfg.vspace)
         self.tight_check.setChecked(cfg.tight_layout)
         self.blockSignals(False)
+
+    def read_vs_from(self, settings):
+        """Populate Vs Profile controls from StudioSettings."""
+        self.blockSignals(True)
+        self.vs_gap_spin.setValue(settings.vs_wspace)
+        self.vs_ratio_spin.setValue(settings.vs_width_ratios[0])
+        self.sig_ratio_spin.setValue(settings.vs_width_ratios[1])
+        self.blockSignals(False)
+
+    def set_vs_visible(self, visible: bool):
+        """Show/hide the Vs Profile layout group."""
+        self._vs_grp.setVisible(visible)

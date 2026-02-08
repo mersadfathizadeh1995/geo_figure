@@ -145,7 +145,28 @@ class StatePersistenceMixin:
         try:
             fig_state = self.capture_figure_state()
             sheet_name = self.sheet_tabs.tabText(self._current_sheet_idx)
-            studio = StudioWindow(fig_state, sheet_name=sheet_name, parent=self)
+
+            # Collect current axis ranges from the PyQtGraph canvas
+            canvas_ranges = {}
+            canvas = self.sheet_tabs.get_current_canvas()
+            if canvas and hasattr(canvas, '_plots'):
+                for key, plot_item in canvas._plots.items():
+                    if key.endswith("_sigma"):
+                        continue
+                    try:
+                        vb = plot_item.vb
+                        x_range, y_range = vb.viewRange()
+                        canvas_ranges[key] = (
+                            (x_range[0], x_range[1]),
+                            (y_range[0], y_range[1]),
+                        )
+                    except Exception:
+                        pass
+
+            studio = StudioWindow(
+                fig_state, sheet_name=sheet_name,
+                canvas_ranges=canvas_ranges, parent=self,
+            )
             studio.setAttribute(QtCore_Qt.WA_DeleteOnClose)
             studio.show()
             self.log_panel.log_info(
