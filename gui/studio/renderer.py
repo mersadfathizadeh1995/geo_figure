@@ -34,6 +34,7 @@ class MplRenderer:
         state: FigureState,
         settings: StudioSettings,
         fig: Optional[Figure] = None,
+        skip_outside_legend: bool = False,
     ) -> Figure:
         """Render the entire figure.
 
@@ -45,8 +46,8 @@ class MplRenderer:
             All visual settings (typography, axis, legend, etc.).
         fig : Figure, optional
             Existing figure to render into. Created if None.
-            The caller is responsible for setting size_inches and DPI
-            before passing the figure.
+        skip_outside_legend : bool
+            If True, omit the outside legend (used for "save legend separately").
 
         Returns
         -------
@@ -87,7 +88,7 @@ class MplRenderer:
             if not k.endswith("_sigma") and k != "sigma_ln"
         )
         self._outside_legend = None
-        if has_outside:
+        if has_outside and not skip_outside_legend:
             self._outside_legend = self._create_outside_legend(fig, axes_map)
         elif settings.figure.tight_layout:
             fig.tight_layout()
@@ -95,25 +96,23 @@ class MplRenderer:
         return fig
 
     def export_legend_only(self, path: str, dpi: int = 300, **save_kwargs):
-        """Export just the outside legend as a separate image file.
-
-        Renders the legend into its own tight figure.
-        """
+        """Export just the outside legend as a separate image file."""
         if self._outside_legend is None:
             return False
         from matplotlib.figure import Figure as MplFigure
         fig_leg = MplFigure(dpi=dpi, facecolor="white")
-        # Copy the legend into a new figure by re-rendering
-        # We re-create from collected handles/labels
+
         old_leg = self._outside_legend
-        handles = [h for h in old_leg.legend_handles]
+        handles = list(old_leg.legend_handles)
         labels = [t.get_text() for t in old_leg.get_texts()]
         if not handles:
             return False
         ncol = old_leg._ncols if hasattr(old_leg, '_ncols') else 1
+
         s = self._settings
         scale = s.legend_scale
         base_fs = s.typography.legend_size * scale
+
         leg = fig_leg.legend(
             handles, labels,
             loc="center",
@@ -124,11 +123,16 @@ class MplRenderer:
             handlelength=1.5,
             ncol=ncol,
         )
-        # Copy bold styling from original
+        # Copy styling (bold, size, visibility) from original
         for i, txt in enumerate(old_leg.get_texts()):
             if i < len(leg.get_texts()):
                 leg.get_texts()[i].set_fontweight(txt.get_fontweight())
                 leg.get_texts()[i].set_fontsize(txt.get_fontsize())
+                leg.get_texts()[i].set_color(txt.get_color())
+        for i, h in enumerate(old_leg.legend_handles):
+            if i < len(leg.legend_handles):
+                leg.legend_handles[i].set_visible(h.get_visible())
+
         fig_leg.savefig(
             path, dpi=dpi, bbox_inches="tight", pad_inches=0.1,
             facecolor=save_kwargs.get("facecolor", "white"),
@@ -707,7 +711,22 @@ class MplRenderer:
         ax_sig.xaxis.set_minor_locator(mtick.AutoMinorLocator())
         ax_sig.grid(True, alpha=0.3, linestyle=":", linewidth=0.5)
 
-        # Legend — use per-subplot settings (only if inside placement)
+        # Legend — only show inside legend if parent subplot uses inside placement
+        # Determine parent subplot key from sigma key
+        if sigma_key == "sigma_ln":
+            parent_key = "vs_profile"
+        elif sigma_key.endswith("_sigma"):
+            parent_key = sigma_key.rsplit("_sigma", 1)[0]
+        else:
+            parent_key = sigma_key
+        parent_lc = self._settings.legend_for(parent_key)
+        # If parent uses outside legend, skip sigma inside legend (collected in outside)
+        if parent_lc.placement != "inside":
+            existing = ax_sig.get_legend()
+            if existing:
+                existing.remove()
+            return
+
         lc = self._settings.legend_for(sigma_key)
         handles, labels = ax_sig.get_legend_handles_labels()
         if handles and lc.show and lc.placement == "inside":
@@ -806,15 +825,16 @@ class MplRenderer:
     def _create_outside_legend(self, fig, axes_map: Dict[str, object]):
         """Create a combined figure-level legend for all subplots with outside placement.
 
-        Supports outside_left, outside_right, outside_top, outside_bottom.
-        Top/bottom legends use horizontal layout (ncol=auto).
-        Returns the legend object for potential separate export.
+        The legend is placed outside the axes area using bbox_to_anchor.
+        The figure is NOT shrunk — instead bbox_inches='tight' at export
+        time will expand the output to include the legend.
+        Returns the legend object.
         """
         s = self._settings
         st = self._state
 
         # Collect subplot groups that want outside legends
-        groups = []  # [(subplot_name, placement, handles, labels)]
+        groups = []  # [(subplot_name, handles, labels)]
         placement_side = None
 
         for key, ax in axes_map.items():
@@ -855,13 +875,21 @@ class MplRenderer:
         scale = s.legend_scale
         base_fs = s.typography.legend_size * scale
 
+        # Track which indices are headers and which are separators
+        header_indices = []
+        separator_indices = []
+
         for i, (name, handles, labels) in enumerate(groups):
             if len(groups) > 1:
                 if i > 0:
+                    # Separator: invisible spacer entry (empty label)
+                    separator_indices.append(len(combined_handles))
                     combined_handles.append(
                         mpatches.Patch(facecolor="none", edgecolor="none")
                     )
-                    combined_labels.append("_nolegend_separator")
+                    combined_labels.append(" ")
+                # Bold header for the subplot name
+                header_indices.append(len(combined_handles))
                 combined_handles.append(
                     mpatches.Patch(facecolor="none", edgecolor="none")
                 )
@@ -883,24 +911,18 @@ class MplRenderer:
                     break
         lc = s.legend_for(first_key) if first_key else s.legend
 
-        # Determine position based on placement side
+        # Determine ncol based on placement direction
         is_horizontal = placement_side in ("outside_top", "outside_bottom")
         n_data_items = sum(len(h) for _, h, _ in groups)
         ncol = min(n_data_items, 6) if is_horizontal else 1
 
-        if placement_side == "outside_left":
-            loc, anchor, margin_key = "center left", (-0.02, 0.5), "left"
-        elif placement_side == "outside_right":
-            loc, anchor, margin_key = "center right", (1.02, 0.5), "right"
-        elif placement_side == "outside_top":
-            loc, anchor, margin_key = "lower center", (0.5, 1.02), "top"
-        else:  # outside_bottom
-            loc, anchor, margin_key = "upper center", (0.5, -0.02), "bottom"
-
+        # Create legend at figure center first; _expand_figure_for_legend
+        # will measure it and reposition it into an appended area.
         legend = fig.legend(
             combined_handles, combined_labels,
-            loc=loc,
-            bbox_to_anchor=anchor,
+            loc="center",
+            bbox_to_anchor=(0.5, 0.5),
+            bbox_transform=fig.transFigure,
             fontsize=base_fs,
             frameon=lc.frame_on,
             framealpha=lc.frame_alpha,
@@ -911,42 +933,95 @@ class MplRenderer:
             ncol=ncol,
         )
 
-        # Style header entries: bold text, no visible marker
-        if len(groups) > 1 and legend:
-            idx = 0
-            for i, (name, handles, labels) in enumerate(groups):
-                if i > 0:
-                    if idx < len(legend.get_texts()):
-                        legend.get_texts()[idx].set_fontsize(base_fs * 0.3)
-                    idx += 1
+        # Style header and separator entries
+        if legend:
+            for idx in separator_indices:
+                if idx < len(legend.get_texts()):
+                    legend.get_texts()[idx].set_fontsize(base_fs * 0.15)
+                    legend.get_texts()[idx].set_color("none")
+                if idx < len(legend.legend_handles):
+                    legend.legend_handles[idx].set_visible(False)
+            for idx in header_indices:
                 if idx < len(legend.get_texts()):
                     legend.get_texts()[idx].set_fontweight("bold")
                     legend.get_texts()[idx].set_fontsize(base_fs * 1.05)
-                idx += 1
-                idx += len(handles)
+                if idx < len(legend.legend_handles):
+                    legend.legend_handles[idx].set_visible(False)
 
-        # Allocate extra margin space for the legend
-        fc = s.figure
-        w = max(fc.width, 0.1)
-        h = max(fc.height, 0.1)
-        if margin_key == "right":
-            legend_frac = 0.18
-            current_right = 1.0 - fc.margin_right / w
-            fig.subplots_adjust(right=current_right - legend_frac)
-        elif margin_key == "left":
-            legend_frac = 0.18
-            current_left = fc.margin_left / w
-            fig.subplots_adjust(left=current_left + legend_frac)
-        elif margin_key == "top":
-            legend_frac = 0.12
-            current_top = 1.0 - fc.margin_top / h
-            fig.subplots_adjust(top=current_top - legend_frac)
-        else:  # bottom
-            legend_frac = 0.12
-            current_bottom = fc.margin_bottom / h
-            fig.subplots_adjust(bottom=current_bottom + legend_frac)
+        # Expand the figure to append the legend as a dedicated area
+        if legend:
+            self._expand_figure_for_legend(fig, legend, placement_side)
 
         return legend
+
+    def _expand_figure_for_legend(self, fig, legend, placement_side):
+        """Expand figure dimensions and reposition axes to append legend."""
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+        # Need a renderer to measure legend bounding box
+        had_canvas = fig.canvas is not None
+        if not had_canvas or not hasattr(fig.canvas, 'get_renderer'):
+            FigureCanvasAgg(fig)
+        fig.canvas.draw()
+        rndr = fig.canvas.get_renderer()
+
+        leg_bb = legend.get_window_extent(rndr)
+        leg_bb_in = leg_bb.transformed(fig.dpi_scale_trans.inverted())
+        leg_w = leg_bb_in.width
+        leg_h = leg_bb_in.height
+
+        fig_w, fig_h = fig.get_size_inches()
+        pad = 0.25  # inches
+
+        all_axes = [a for a in fig.get_axes()]
+
+        if placement_side in ("outside_left", "outside_right"):
+            extra = leg_w + pad
+            new_w = fig_w + extra
+            ratio = fig_w / new_w
+
+            if placement_side == "outside_left":
+                shift = extra / new_w
+                leg_x = shift / 2.0
+            else:
+                shift = 0.0
+                leg_x = 1.0 - (extra / 2.0) / new_w
+
+            fig.set_size_inches(new_w, fig_h)
+            for ax in all_axes:
+                pos = ax.get_position()
+                ax.set_position([
+                    shift + pos.x0 * ratio, pos.y0,
+                    pos.width * ratio, pos.height,
+                ])
+            legend.set_bbox_to_anchor(
+                (leg_x, 0.5), transform=fig.transFigure
+            )
+            legend._loc = 10  # center
+
+        elif placement_side in ("outside_top", "outside_bottom"):
+            extra = leg_h + pad
+            new_h = fig_h + extra
+            ratio = fig_h / new_h
+
+            if placement_side == "outside_bottom":
+                shift = extra / new_h
+                leg_y = shift / 2.0
+            else:
+                shift = 0.0
+                leg_y = 1.0 - (extra / 2.0) / new_h
+
+            fig.set_size_inches(fig_w, new_h)
+            for ax in all_axes:
+                pos = ax.get_position()
+                ax.set_position([
+                    pos.x0, shift + pos.y0 * ratio,
+                    pos.width, pos.height * ratio,
+                ])
+            legend.set_bbox_to_anchor(
+                (0.5, leg_y), transform=fig.transFigure
+            )
+            legend._loc = 10  # center
 
     # ── Post-processing ───────────────────────────────────────────
 

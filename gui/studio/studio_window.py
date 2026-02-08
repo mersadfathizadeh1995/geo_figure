@@ -282,15 +282,17 @@ class StudioWindow(QMainWindow):
             else:
                 acfg.x_scale = "log"
 
-            # Transfer canvas axis ranges as fallback limits but keep auto on
+            # Transfer canvas axis ranges as fallback limits
             if key in self._canvas_ranges:
                 (xmin, xmax), (ymin, ymax) = self._canvas_ranges[key]
                 acfg.x_min = xmin
                 acfg.x_max = xmax
                 acfg.y_min = ymin
                 acfg.y_max = ymax
-                acfg.auto_x = True
-                acfg.auto_y = True
+                # Keep auto on only for non-Vs subplots
+                if cell_type != "vs_profile" and key != "vs_profile":
+                    acfg.auto_x = True
+                    acfg.auto_y = True
 
     # ── Rendering ─────────────────────────────────────────────────
 
@@ -305,9 +307,10 @@ class StudioWindow(QMainWindow):
         """Render preview at exact configured figsize.
 
         The canvas widget is set to the exact pixel size corresponding
-        to the configured figure dimensions at screen DPI. This ensures
-        the preview shows the identical layout, margins, and font
-        proportions as the final export.
+        to the configured figure dimensions at screen DPI. If the
+        renderer expanded the figure for an outside legend, the canvas
+        is sized to the expanded dimensions so the legend is visible
+        (scrollable if needed).
         """
         self._is_rendering = True
         self._status.showMessage("Rendering...")
@@ -316,14 +319,19 @@ class StudioWindow(QMainWindow):
             self._collect_settings()
             w = self._settings.figure.width
             h = self._settings.figure.height
-            w_px = max(int(w * self.PREVIEW_DPI), 200)
-            h_px = max(int(h * self.PREVIEW_DPI), 150)
 
-            # Size the canvas to match the exact figure dimensions
-            self._canvas.setFixedSize(w_px, h_px)
+            # Set initial size; renderer may expand it for outside legend
+            self._figure.set_size_inches(w, h)
             self._figure.set_dpi(self.PREVIEW_DPI)
 
             self._renderer.render(self._state, self._settings, self._figure)
+
+            # Read back actual size (may have been expanded by legend append)
+            actual_w, actual_h = self._figure.get_size_inches()
+            w_px = max(int(actual_w * self.PREVIEW_DPI), 200)
+            h_px = max(int(actual_h * self.PREVIEW_DPI), 150)
+            self._canvas.setFixedSize(w_px, h_px)
+
             self._canvas.draw_idle()
             self._status.showMessage("Ready", 3000)
         except Exception as e:
@@ -382,27 +390,41 @@ class StudioWindow(QMainWindow):
         try:
             self._collect_settings()
             export_dpi = options.get("dpi", self._settings.figure.dpi)
+            legend_separate = options.get("legend_separate", False)
+
             export_fig = Figure(
                 figsize=(self._settings.figure.width,
                          self._settings.figure.height),
                 dpi=export_dpi,
                 facecolor=options.get("facecolor", "white"),
             )
+            # When saving legend separately, render figure without outside legend
             self._renderer.render(
-                self._state, self._settings, export_fig
+                self._state, self._settings, export_fig,
+                skip_outside_legend=legend_separate,
             )
-            export_fig.savefig(
-                path,
+            save_kw = dict(
                 dpi=export_dpi,
                 transparent=options.get("transparent", False),
                 bbox_inches=options.get("bbox_inches", "tight"),
                 pad_inches=options.get("pad_inches", 0.1),
                 facecolor=options.get("facecolor", "white"),
             )
+            export_fig.savefig(path, **save_kw)
             msgs = [f"Exported: {os.path.basename(path)}"]
 
-            # Export legend separately if requested
-            if options.get("legend_separate"):
+            if legend_separate:
+                # Re-render WITH legend to capture it, then export legend only
+                leg_fig = Figure(
+                    figsize=(self._settings.figure.width,
+                             self._settings.figure.height),
+                    dpi=export_dpi,
+                    facecolor=options.get("facecolor", "white"),
+                )
+                self._renderer.render(
+                    self._state, self._settings, leg_fig,
+                    skip_outside_legend=False,
+                )
                 base, ext = os.path.splitext(path)
                 leg_path = f"{base}_legend{ext}"
                 if self._renderer.export_legend_only(
