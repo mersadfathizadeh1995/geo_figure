@@ -98,6 +98,7 @@ class CurveTreePanel(QWidget):
     vs_profile_selected = Signal(str, str)           # profile uid, layer_name ("" for root)
     vs_profile_layer_toggled = Signal(str, str, bool)  # prof_uid, layer, visible
     remove_vs_profile_requested = Signal(str)   # profile uid
+    vs_profile_subplot_changed = Signal(str, str)  # prof_uid, new_subplot_key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -585,5 +586,8 @@ class CurveTreePanel(QWidget):
         if uid.startswith(_ENSEMBLE_PREFIX):
             ens_uid = uid.replace(_ENSEMBLE_PREFIX, "")
             self.ensemble_subplot_changed.emit(ens_uid, new_key)
+        elif uid.startswith(_PROFILE_PREFIX):
+            prof_uid = uid.replace(_PROFILE_PREFIX, "")
+            self.vs_profile_subplot_changed.emit(prof_uid, new_key)
         else:
             self.curve_subplot_changed.emit(uid, new_key)

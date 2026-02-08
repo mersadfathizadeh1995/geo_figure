@@ -153,6 +153,9 @@ class MainWindow(
         self.curve_tree.vs_profile_selected.connect(self._on_vs_profile_selected)
         self.curve_tree.vs_profile_layer_toggled.connect(self._on_vs_profile_layer_toggled)
         self.curve_tree.remove_vs_profile_requested.connect(self._on_remove_vs_profile)
+        self.curve_tree.vs_profile_subplot_changed.connect(
+            self._on_vs_profile_subplot_changed
+        )
 
         # Properties panel signals
         self.properties.curve_updated.connect(self._on_curve_updated)

@@ -54,6 +54,26 @@ class SubplotHandlersMixin:
             f"Moved '{ens.display_name}' to subplot '{new_key}'"
         )
 
+    def _on_vs_profile_subplot_changed(self, uid: str, new_key: str):
+        """Move a Vs profile to a different subplot."""
+        prof = self._vs_profiles.get(uid)
+        if not prof:
+            return
+        if prof.subplot_key == new_key:
+            return
+        prof.subplot_key = new_key
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.remove_vs_profile(uid)
+        canvas.add_vs_profile(prof)
+        canvas.auto_range()
+        self.curve_tree.tree.blockSignals(True)
+        self.curve_tree.remove_vs_profile(uid)
+        self.curve_tree.add_vs_profile(prof)
+        self.curve_tree.tree.blockSignals(False)
+        self.log_panel.log_info(
+            f"Moved '{prof.display_name}' to subplot '{new_key}'"
+        )
+
     def _on_subplot_renamed(self, key: str, new_name: str):
         """Rename a subplot on the canvas and refresh tree."""
         canvas = self.sheet_tabs.get_current_canvas()

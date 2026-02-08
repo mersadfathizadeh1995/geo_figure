@@ -88,77 +88,61 @@ def _create_grid_layout(
     left: float, right: float, top: float, bottom: float,
     hspace: float, wspace: float,
 ) -> Dict[str, object]:
-    """Create NxM grid with mixed DC/Vs cells."""
+    """Create NxM grid with mixed DC/Vs cells.
+
+    Vs columns use a nested GridSpecFromSubplotSpec so they occupy exactly
+    the same total width as a DC column.
+    """
+    from matplotlib.gridspec import GridSpecFromSubplotSpec
+
     rows, cols = state.grid_rows, state.grid_cols
     stypes = state.subplot_types
 
-    # Per-column logical ratios (default to equal)
     col_ratios = list(state.grid_col_ratios)
     while len(col_ratios) < cols:
         col_ratios.append(1.0)
 
-    # Count actual columns (Vs cells need 2: main + sigma).
-    # Check ALL rows per column — any vs_profile means the column is wide.
-    actual_cols = 0
-    col_map = {}  # grid_col -> actual_start_col
-    vs_cols = set()  # logical columns that have at least one vs_profile
-    width_ratios = []
+    # Detect which logical columns contain at least one vs_profile
+    vs_cols = set()
     for c in range(cols):
-        col_map[c] = actual_cols
-        is_vs = any(
-            stypes.get(f"cell_{r}_{c}") == "vs_profile"
-            for r in range(rows)
-        )
-        r_base = max(col_ratios[c], 0.1)
-        if is_vs:
+        if any(stypes.get(f"cell_{r}_{c}") == "vs_profile"
+               for r in range(rows)):
             vs_cols.add(c)
-            vs_r, sig_r = settings.vs_width_ratios
-            width_ratios.extend([r_base * vs_r, r_base * sig_r])
-            actual_cols += 2
-        else:
-            width_ratios.append(r_base)
-            actual_cols += 1
 
+    # One gridspec column per logical column (equal treatment)
     gs = GridSpec(
-        rows, actual_cols, figure=fig,
-        width_ratios=width_ratios,
+        rows, cols, figure=fig,
+        width_ratios=[max(r, 0.1) for r in col_ratios],
         left=left, right=right, bottom=bottom, top=top,
         hspace=hspace, wspace=wspace,
     )
 
     axes = {}
-    vs_pairs = []  # [(vs_key, sig_key), ...] for post-adjustment
+    vs_r, sig_r = settings.vs_width_ratios
+    vs_ws = settings.vs_wspace
+
     for r in range(rows):
         for c in range(cols):
             key = f"cell_{r}_{c}"
-            ac = col_map[c]
             cell_type = stypes.get(key, "dc")
+
             if cell_type == "vs_profile":
-                ax_vs = fig.add_subplot(gs[r, ac])
-                ax_sig = fig.add_subplot(gs[r, ac + 1], sharey=ax_vs)
+                # Subdivide this single cell into 2 sub-columns
+                inner = GridSpecFromSubplotSpec(
+                    1, 2,
+                    subplot_spec=gs[r, c],
+                    width_ratios=[vs_r, sig_r],
+                    wspace=vs_ws,
+                )
+                ax_vs = fig.add_subplot(inner[0, 0])
+                ax_sig = fig.add_subplot(inner[0, 1], sharey=ax_vs)
                 axes[key] = ax_vs
                 axes[f"{key}_sigma"] = ax_sig
-                vs_pairs.append((key, f"{key}_sigma"))
             elif c in vs_cols:
-                # DC cell in a column that has vs_profile elsewhere — span both
-                axes[key] = fig.add_subplot(gs[r, ac:ac + 2])
+                # DC cell in a column that has vs_profile elsewhere —
+                # just use the full cell (no subdivision needed)
+                axes[key] = fig.add_subplot(gs[r, c])
             else:
-                axes[key] = fig.add_subplot(gs[r, ac])
-
-    # Adjust gap between Vs and sigma subplots using vs_wspace
-    vs_ws = settings.vs_wspace
-    for vs_key, sig_key in vs_pairs:
-        ax_vs = axes[vs_key]
-        ax_sig = axes[sig_key]
-        pos_vs = ax_vs.get_position()
-        pos_sig = ax_sig.get_position()
-        total_w = pos_sig.x1 - pos_vs.x0
-        gap_frac = vs_ws * (pos_sig.width + pos_vs.width)
-        new_sig_x0 = pos_vs.x1 + gap_frac
-        if new_sig_x0 < pos_sig.x1:
-            ax_sig.set_position([
-                new_sig_x0, pos_sig.y0,
-                pos_sig.x1 - new_sig_x0, pos_sig.height,
-            ])
+                axes[key] = fig.add_subplot(gs[r, c])
 
     return axes

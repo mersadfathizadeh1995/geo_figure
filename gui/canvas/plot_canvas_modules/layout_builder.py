@@ -2,6 +2,7 @@
 import pyqtgraph as pg
 from PySide6.QtWidgets import QMenu, QInputDialog
 from PySide6.QtGui import QColor
+from PySide6.QtCore import QSizeF, Qt as QtCore_Qt
 from typing import Dict, Optional, Tuple
 
 from .constants import (
@@ -119,6 +120,12 @@ def _build_grid(canvas):
             if cell_type == "vs_profile":
                 # Nest Vs + sigma inside a sub-layout within one grid cell
                 sub = canvas.graphics_layout.addLayout(row=r, col=c)
+                # Remove all internal padding so it matches a direct PlotItem
+                sub.setContentsMargins(0, 0, 0, 0)
+                sub.layout.setSpacing(0)
+                # Prevent the sub-layout from inflating the column's size hints
+                sub.setMinimumSize(0, 0)
+                sub.setPreferredSize(0, 0)
                 total = vs_r + sig_r
                 sub.layout.setColumnStretchFactor(
                     0, round((vs_r / total) * 100))
