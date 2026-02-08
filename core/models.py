@@ -306,6 +306,7 @@ class FigureState:
     layout_mode: str = "combined"
     grid_rows: int = 1
     grid_cols: int = 1
+    grid_col_ratios: List[float] = field(default_factory=list)  # per-column width ratios
     link_y: bool = False
     link_x: bool = False
     subplot_names: Dict[str, str] = field(default_factory=dict)

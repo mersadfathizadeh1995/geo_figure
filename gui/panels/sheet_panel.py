@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QLabel, QLineEdit,
     QComboBox, QSpinBox, QCheckBox, QScrollArea, QGroupBox,
-    QHBoxLayout, QToolButton,
+    QHBoxLayout, QToolButton, QDoubleSpinBox,
 )
 from PySide6.QtCore import Signal, Qt
 
@@ -44,6 +44,8 @@ class SheetPanel(QWidget):
 
     sheet_name_changed = Signal(str)       # new name
     legend_changed = Signal(dict)          # full legend config
+    col_ratios_changed = Signal(list)      # per-column width ratios
+    vs_ratios_changed = Signal(float, float)  # vs_ratio, sigma_ratio
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -124,6 +126,38 @@ class SheetPanel(QWidget):
 
         layout.addWidget(legend_sec)
 
+        # -- Column Width Ratios --
+        self._ratio_sec = _CollapsibleSection("Column Width Ratios", expanded=False)
+        self._ratio_container = QWidget()
+        self._ratio_layout = QVBoxLayout(self._ratio_container)
+        self._ratio_layout.setContentsMargins(0, 0, 0, 0)
+        self._ratio_layout.setSpacing(2)
+        self._ratio_sec.form.addRow(self._ratio_container)
+        self._ratio_spins = []
+        self._ratio_sec.setVisible(False)
+        layout.addWidget(self._ratio_sec)
+
+        # -- Vs Profile Layout (shown when a Vs cell exists) --
+        self._vs_sec = _CollapsibleSection("Vs Profile Layout", expanded=True)
+        self.vs_ratio_spin = QDoubleSpinBox()
+        self.vs_ratio_spin.setRange(0.5, 10.0)
+        self.vs_ratio_spin.setSingleStep(0.5)
+        self.vs_ratio_spin.setDecimals(1)
+        self.vs_ratio_spin.setValue(3.0)
+        self.vs_ratio_spin.valueChanged.connect(self._on_vs_ratio_changed)
+        self._vs_sec.form.addRow("Vs Width:", self.vs_ratio_spin)
+
+        self.sig_ratio_spin = QDoubleSpinBox()
+        self.sig_ratio_spin.setRange(0.5, 5.0)
+        self.sig_ratio_spin.setSingleStep(0.25)
+        self.sig_ratio_spin.setDecimals(1)
+        self.sig_ratio_spin.setValue(1.0)
+        self.sig_ratio_spin.valueChanged.connect(self._on_vs_ratio_changed)
+        self._vs_sec.form.addRow("Sigma Width:", self.sig_ratio_spin)
+
+        self._vs_sec.setVisible(False)
+        layout.addWidget(self._vs_sec)
+
         layout.addStretch()
         scroll.setWidget(container)
         main_layout.addWidget(scroll)
@@ -190,3 +224,55 @@ class SheetPanel(QWidget):
         if self._updating:
             return
         self.legend_changed.emit(self.get_legend_config())
+
+    def _on_ratio_changed(self):
+        if self._updating:
+            return
+        ratios = [s.value() for s in self._ratio_spins]
+        self.col_ratios_changed.emit(ratios)
+
+    # -- Column ratio API -------------------------------------------------
+
+    def set_grid_col_ratios(self, cols: int, ratios: list):
+        """Rebuild ratio spinboxes for the given column count."""
+        self._updating = True
+        # Clear existing
+        for spin in self._ratio_spins:
+            spin.deleteLater()
+        self._ratio_spins.clear()
+        # Remove existing row widgets
+        while self._ratio_layout.count():
+            item = self._ratio_layout.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        if cols < 2:
+            self._ratio_sec.setVisible(False)
+            self._updating = False
+            return
+
+        self._ratio_sec.setVisible(True)
+        while len(ratios) < cols:
+            ratios.append(1.0)
+
+        for c in range(cols):
+            row = QHBoxLayout()
+            row.addWidget(QLabel(f"C{c + 1}:"))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.1, 10.0)
+            spin.setSingleStep(0.1)
+            spin.setDecimals(1)
+            spin.setValue(ratios[c])
+            spin.valueChanged.connect(self._on_ratio_changed)
+            self._ratio_spins.append(spin)
+            row.addWidget(spin)
+            w = QWidget()
+            w.setLayout(row)
+            self._ratio_layout.addWidget(w)
+
+        self._updating = False
+
+    def get_grid_col_ratios(self) -> list:
+        """Return current ratio values."""
+        return [s.value() for s in self._ratio_spins]

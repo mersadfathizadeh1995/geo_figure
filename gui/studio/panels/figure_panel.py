@@ -1,7 +1,7 @@
 """Figure settings panel — size, DPI, margins, spacing."""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QDoubleSpinBox, QSpinBox,
-    QCheckBox, QLabel, QGroupBox,
+    QCheckBox, QLabel, QGroupBox, QComboBox,
 )
 from PySide6.QtCore import Signal
 
@@ -101,6 +101,30 @@ class FigurePanel(QWidget):
         self._vs_grp.setVisible(False)
         layout.addWidget(self._vs_grp)
 
+        # -- Subplot Ratios (grid mode only) --
+        self._ratio_grp = QGroupBox("Subplot Width Ratios")
+        ratio_form = QFormLayout(self._ratio_grp)
+        ratio_form.setSpacing(4)
+
+        self.ratio_subplot_combo = QComboBox()
+        self.ratio_subplot_combo.currentIndexChanged.connect(
+            self._on_ratio_subplot_changed
+        )
+        ratio_form.addRow("Subplot:", self.ratio_subplot_combo)
+
+        self.ratio_spin = QDoubleSpinBox()
+        self.ratio_spin.setRange(0.1, 10.0)
+        self.ratio_spin.setSingleStep(0.1)
+        self.ratio_spin.setDecimals(1)
+        self.ratio_spin.setValue(1.0)
+        self.ratio_spin.valueChanged.connect(self._on_ratio_value_changed)
+        ratio_form.addRow("Width Ratio:", self.ratio_spin)
+
+        self._ratio_grp.setVisible(False)
+        self._ratio_data = {}  # col_index -> ratio value
+        self._ratio_updating = False
+        layout.addWidget(self._ratio_grp)
+
         layout.addStretch()
 
         # Connect all signals
@@ -169,3 +193,72 @@ class FigurePanel(QWidget):
     def set_vs_visible(self, visible: bool):
         """Show/hide the Vs Profile layout group."""
         self._vs_grp.setVisible(visible)
+
+    # -- Subplot ratio controls -------------------------------------------
+
+    def set_ratio_subplots(self, subplot_info: list, col_ratios: list):
+        """Populate subplot ratio dropdown from [(key, name), ...] list.
+        Only shown when grid_cols >= 2."""
+        self._ratio_updating = True
+        self.ratio_subplot_combo.clear()
+        self._ratio_data.clear()
+
+        # Determine unique columns from subplot keys (cell_R_C pattern)
+        col_names = []
+        for key, name in subplot_info:
+            if key.startswith("cell_"):
+                parts = key.split("_")
+                if len(parts) >= 3:
+                    c = int(parts[2])
+                    if c not in self._ratio_data:
+                        col_names.append((c, name))
+                        idx = len(col_ratios) > c
+                        self._ratio_data[c] = col_ratios[c] if c < len(col_ratios) else 1.0
+
+        if len(self._ratio_data) < 2:
+            self._ratio_grp.setVisible(False)
+            self._ratio_updating = False
+            return
+
+        self._ratio_grp.setVisible(True)
+        for c, name in sorted(col_names):
+            self.ratio_subplot_combo.addItem(
+                f"Column {c + 1}: {name}", c
+            )
+
+        if self.ratio_subplot_combo.count() > 0:
+            self.ratio_subplot_combo.setCurrentIndex(0)
+            c = self.ratio_subplot_combo.currentData()
+            self.ratio_spin.setValue(self._ratio_data.get(c, 1.0))
+
+        self._ratio_updating = False
+
+    def _on_ratio_subplot_changed(self, index):
+        if self._ratio_updating or index < 0:
+            return
+        c = self.ratio_subplot_combo.itemData(index)
+        if c is not None:
+            self._ratio_updating = True
+            self.ratio_spin.setValue(self._ratio_data.get(c, 1.0))
+            self._ratio_updating = False
+
+    def _on_ratio_value_changed(self, value):
+        if self._ratio_updating:
+            return
+        c = self.ratio_subplot_combo.currentData()
+        if c is not None:
+            self._ratio_data[c] = value
+            self.changed.emit()
+
+    def get_col_ratios(self) -> list:
+        """Return column ratios as a list ordered by column index."""
+        if not self._ratio_data:
+            return []
+        max_col = max(self._ratio_data.keys())
+        return [self._ratio_data.get(c, 1.0) for c in range(max_col + 1)]
+
+    def write_ratios_to(self, state):
+        """Write ratio overrides into FigureState."""
+        ratios = self.get_col_ratios()
+        if ratios:
+            state.grid_col_ratios = ratios

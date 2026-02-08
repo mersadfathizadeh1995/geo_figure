@@ -107,6 +107,7 @@ class PlotCanvas(QWidget):
         self._layout_mode = LAYOUT_COMBINED
         self._grid_rows = 1
         self._grid_cols = 1
+        self._grid_col_ratios: List[float] = []
         self._link_y = False
         self._link_x = False
         self._plots: Dict[str, pg.PlotItem] = {}  # key -> PlotItem
@@ -166,6 +167,10 @@ class PlotCanvas(QWidget):
         elif self._layout_mode == LAYOUT_GRID:
             first_dc = None
             first_vs = None
+            # Ensure col ratios are valid
+            ratios = list(self._grid_col_ratios)
+            while len(ratios) < self._grid_cols:
+                ratios.append(1.0)
             col_offset = 0  # tracks actual column in graphics layout
             for r in range(self._grid_rows):
                 col_offset = 0
@@ -176,22 +181,23 @@ class PlotCanvas(QWidget):
                     name = self._subplot_names.get(key, default_name)
                     self._subplot_names.setdefault(key, default_name)
                     self._subplot_types.setdefault(key, 'dc')
+                    col_ratio = max(ratios[c], 0.1)
 
                     if cell_type == 'vs_profile':
-                        # Vs profile cell (linear axes, inverted Y)
                         p = self.graphics_layout.addPlot(row=r, col=col_offset, title=name)
                         self._plots[key] = p
                         self._configure_vs_plot(p, key)
 
-                        # Add companion sigma_ln subplot
                         sig_key = f"{key}_sigma"
                         p_sig = self.graphics_layout.addPlot(row=r, col=col_offset + 1, title='')
                         self._plots[sig_key] = p_sig
                         self._configure_sigma_plot(p_sig, sig_key)
                         p_sig.setYLink(p)
-                        # 3:1 stretch ratio for vs : sigma
-                        self.graphics_layout.ci.layout.setColumnStretchFactor(col_offset, 3)
-                        self.graphics_layout.ci.layout.setColumnStretchFactor(col_offset + 1, 1)
+                        # Split ratio 3:1 within this column, scaled by col_ratio
+                        self.graphics_layout.ci.layout.setColumnStretchFactor(
+                            col_offset, round(col_ratio * 300))
+                        self.graphics_layout.ci.layout.setColumnStretchFactor(
+                            col_offset + 1, round(col_ratio * 100))
                         col_offset += 2
 
                         if first_vs is None:
@@ -199,7 +205,6 @@ class PlotCanvas(QWidget):
                         elif self._link_y:
                             p.setYLink(first_vs)
                     else:
-                        # DC cell (log-frequency axes)
                         p = self.graphics_layout.addPlot(
                             row=r, col=col_offset,
                             axisItems={'bottom': LogFreqAxis(orientation='bottom')},
@@ -207,6 +212,8 @@ class PlotCanvas(QWidget):
                         )
                         self._plots[key] = p
                         self._configure_plot(p, key)
+                        self.graphics_layout.ci.layout.setColumnStretchFactor(
+                            col_offset, round(col_ratio * 100))
                         col_offset += 1
 
                         if first_dc is None:
@@ -449,15 +456,22 @@ class PlotCanvas(QWidget):
         self._grid_cols = max(1, cols)
         self._layout_mode = LAYOUT_GRID
 
+        # Reset column ratios to equal when grid dimensions change
+        self._grid_col_ratios = [1.0] * self._grid_cols
+
         # Migrate subplot types when transitioning from dedicated Vs Profile layout
         if old_mode == LAYOUT_VS_PROFILE:
             self._subplot_types['cell_0_0'] = 'vs_profile'
-            # Re-assign all Vs profile data to the first grid cell
             for uid, entry in self._vs_profiles.items():
                 data = entry.get('data')
                 if data:
                     data.subplot_key = 'cell_0_0'
 
+        self.rebuild()
+
+    def set_grid_col_ratios(self, ratios: list):
+        """Set per-column width ratios and rebuild."""
+        self._grid_col_ratios = list(ratios)
         self.rebuild()
 
     def set_subplot_type(self, key: str, stype: str):
@@ -509,6 +523,7 @@ class PlotCanvas(QWidget):
             "layout_mode": self._layout_mode,
             "grid_rows": self._grid_rows,
             "grid_cols": self._grid_cols,
+            "grid_col_ratios": list(self._grid_col_ratios),
             "link_y": self._link_y,
             "link_x": self._link_x,
             "subplot_names": dict(self._subplot_names),

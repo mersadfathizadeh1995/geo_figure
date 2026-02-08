@@ -231,6 +231,14 @@ class StudioWindow(QMainWindow):
         if has_vs:
             self._figure_panel.read_vs_from(self._settings)
 
+        # Show subplot ratio controls for grid mode with 2+ columns
+        if self._state.layout_mode == "grid" and self._state.grid_cols >= 2:
+            self._figure_panel.set_ratio_subplots(
+                subplot_info, list(self._state.grid_col_ratios)
+            )
+        else:
+            self._figure_panel._ratio_grp.setVisible(False)
+
         # Populate axis panel with subplot info and canvas ranges
         self._axis_panel.set_subplots(subplot_info, self._settings)
         self._axis_panel.set_canvas_ranges(self._canvas_ranges)
@@ -267,15 +275,15 @@ class StudioWindow(QMainWindow):
             else:
                 acfg.x_scale = "log"
 
-            # Transfer canvas axis ranges if available
+            # Transfer canvas axis ranges as fallback limits but keep auto on
             if key in self._canvas_ranges:
                 (xmin, xmax), (ymin, ymax) = self._canvas_ranges[key]
-                acfg.auto_x = False
-                acfg.auto_y = False
                 acfg.x_min = xmin
                 acfg.x_max = xmax
                 acfg.y_min = ymin
                 acfg.y_max = ymax
+                acfg.auto_x = True
+                acfg.auto_y = True
 
     # ── Rendering ─────────────────────────────────────────────────
 
@@ -321,6 +329,7 @@ class StudioWindow(QMainWindow):
         """Read all panel values into self._settings."""
         self._figure_panel.write_to(self._settings.figure)
         self._figure_panel.write_vs_to(self._settings)
+        self._figure_panel.write_ratios_to(self._state)
         self._typography_panel.write_to(self._settings.typography)
         self._axis_panel.sync_all()
         self._legend_panel.write_to(self._settings.legend)

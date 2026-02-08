@@ -86,3 +86,8 @@ class LayoutActionsMixin:
                 break
         self.sheet_tabs.setTabText(idx, new_name)
         self.curve_dock.setWindowTitle(f"Data - {new_name}")
+
+    def _on_col_ratios_changed(self, ratios: list):
+        """Apply column width ratios to the current canvas."""
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.set_grid_col_ratios(ratios)

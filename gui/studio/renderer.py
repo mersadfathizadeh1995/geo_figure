@@ -184,6 +184,11 @@ class MplRenderer:
         rows, cols = st.grid_rows, st.grid_cols
         stypes = st.subplot_types
 
+        # Per-column logical ratios (default to equal)
+        col_ratios = list(st.grid_col_ratios)
+        while len(col_ratios) < cols:
+            col_ratios.append(1.0)
+
         # Count actual columns (Vs cells need 2: main + sigma)
         actual_cols = 0
         col_map = {}  # grid_col -> actual_start_col
@@ -191,12 +196,13 @@ class MplRenderer:
         for c in range(cols):
             col_map[c] = actual_cols
             key = f"cell_0_{c}"
+            r_base = max(col_ratios[c], 0.1)
             if stypes.get(key) == "vs_profile":
                 vs_r, sig_r = self._settings.vs_width_ratios
-                width_ratios.extend([vs_r, sig_r])
+                width_ratios.extend([r_base * vs_r, r_base * sig_r])
                 actual_cols += 2
             else:
-                width_ratios.append(1)
+                width_ratios.append(r_base)
                 actual_cols += 1
 
         gs = GridSpec(

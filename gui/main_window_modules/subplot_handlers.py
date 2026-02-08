@@ -83,3 +83,8 @@ class SubplotHandlersMixin:
                 ens.subplot_key = first_key
 
         self._rebuild_tree()
+
+        # Sync column ratio UI
+        cols = canvas._grid_cols if layout_mode == "grid" else 0
+        ratios = list(canvas._grid_col_ratios)
+        self.sheet_panel.set_grid_col_ratios(cols, ratios)

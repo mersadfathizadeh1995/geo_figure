@@ -85,6 +85,9 @@ class SheetManagerMixin:
 
         # Sync legend config from canvas to sheet panel
         self.sheet_panel.set_legend_config(canvas.get_legend_config())
+        # Sync column ratios
+        cols = canvas._grid_cols if canvas.layout_mode == "grid" else 0
+        self.sheet_panel.set_grid_col_ratios(cols, list(canvas._grid_col_ratios))
         # Sync sheet info
         sheet_name = self.sheet_tabs.tabText(index) if index >= 0 else ""
         self.sheet_panel.set_sheet_info(
