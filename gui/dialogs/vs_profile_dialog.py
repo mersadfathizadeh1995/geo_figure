@@ -12,7 +12,7 @@ from PySide6.QtCore import Qt, QSettings, QThread, Signal
 
 class ProfileWorker(QThread):
     """Background thread for running Geopsy profile extraction."""
-    finished = Signal(list)   # list of (depth, vel) tuples
+    finished = Signal(list, str)   # list of (depth, vel) tuples, raw_text
     error = Signal(str)
     progress = Signal(str)
 
@@ -24,8 +24,8 @@ class ProfileWorker(QThread):
         try:
             from geo_figure.io.report_reader import extract_vs_profiles
             self.progress.emit("Running gpdcreport | gpprofile ...")
-            profiles = extract_vs_profiles(**self._params)
-            self.finished.emit(profiles)
+            profiles, raw_text = extract_vs_profiles(**self._params)
+            self.finished.emit(profiles, raw_text)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -33,7 +33,7 @@ class ProfileWorker(QThread):
 class VsProfileDialog(QDialog):
     """Dialog to configure and run Vs profile extraction."""
 
-    extraction_complete = Signal(list, dict)  # profiles, params
+    extraction_complete = Signal(list, dict)  # profiles, params (params includes 'raw_text')
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -181,7 +181,7 @@ class VsProfileDialog(QDialog):
     def _on_progress(self, msg):
         self.progress_label.setText(msg)
 
-    def _on_finished(self, profiles):
+    def _on_finished(self, profiles, raw_text):
         self.progress_bar.setVisible(False)
         self.extract_btn.setEnabled(True)
         n = len(profiles)
@@ -189,6 +189,7 @@ class VsProfileDialog(QDialog):
             self.progress_label.setText("No profiles extracted.")
             return
         self.progress_label.setText(f"Extracted {n} profiles.")
+        self._extract_params["raw_text"] = raw_text
         self.extraction_complete.emit(profiles, self._extract_params)
 
     def _on_error(self, msg):

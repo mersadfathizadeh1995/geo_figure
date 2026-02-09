@@ -81,7 +81,7 @@ def _render_one_vs_profile(
     """Render a single VsProfileData."""
     convert = vf
 
-    # Determine depth range from data
+    # Determine depth range from data (in metres), then convert
     data_depth = 0.0
     if prof.profiles:
         for d, v in prof.profiles:
@@ -90,13 +90,14 @@ def _render_one_vs_profile(
                 data_depth = max(data_depth, float(np.max(finite)))
     if data_depth <= 0:
         data_depth = prof.depth_max_plot
-    depth_max = data_depth + max(data_depth * 0.1, 5.0)
+    data_depth *= convert
+    depth_max = data_depth + max(data_depth * 0.1, 5.0 * convert)
 
     # --- Percentile band (bottom) ---
     pct = prof.percentile_layer
     if pct.visible and prof.depth_grid is not None and prof.p_low is not None:
         c = matplotlib.colors.to_rgba(pct.color, alpha=pct.alpha / 255.0)
-        dg = prof.depth_grid
+        dg = prof.depth_grid * convert
         mask = dg <= depth_max
         ax_vs.fill_betweenx(
             dg[mask],
@@ -118,7 +119,7 @@ def _render_one_vs_profile(
             if not np.any(finite_mask):
                 continue
             last_valid = np.max(np.where(finite_mask)[0])
-            d_plot = d[:last_valid + 1].copy()
+            d_plot = (d[:last_valid + 1] * convert).copy()
             v_plot = (v[:last_valid + 1] * convert).copy()
             if d_plot[-1] < depth_max:
                 d_plot = np.append(d_plot, depth_max)
@@ -133,7 +134,7 @@ def _render_one_vs_profile(
     # --- Median step function (top) ---
     med = prof.median_layer
     if med.visible and prof.median_depth_paired is not None:
-        md = prof.median_depth_paired.copy()
+        md = (prof.median_depth_paired * convert).copy()
         mv = (prof.median_vel_paired * convert).copy()
         finite_mask = np.isfinite(md) & (md > 0)
         if np.any(finite_mask):
@@ -166,7 +167,7 @@ def _render_one_vs_profile(
     sig = prof.sigma_layer
     if (ax_sig is not None and sig.visible
             and prof.sigma_ln is not None and prof.depth_grid is not None):
-        dg = prof.depth_grid
+        dg = prof.depth_grid * convert
         mask = dg <= depth_max
         ax_sig.plot(
             prof.sigma_ln[mask], dg[mask],

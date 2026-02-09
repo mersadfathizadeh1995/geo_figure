@@ -13,7 +13,7 @@ def add_vs_profile(canvas, prof_data: VsProfileData):
     convert = 3.28084 if canvas._velocity_unit == "imperial" else 1.0
     vel_unit = VEL_UNIT_STR.get(canvas._velocity_unit, "m/s")
 
-    # Compute actual data depth
+    # Compute actual data depth (in metres), then convert
     data_depth = 0.0
     if prof_data.profiles:
         for d, v in prof_data.profiles:
@@ -22,7 +22,8 @@ def add_vs_profile(canvas, prof_data: VsProfileData):
                 data_depth = max(data_depth, float(np.max(finite)))
     if data_depth <= 0:
         data_depth = prof_data.depth_max_plot
-    depth_max = data_depth + max(data_depth * 0.1, 5.0)
+    data_depth *= convert
+    depth_max = data_depth + max(data_depth * 0.1, 5.0 * convert)
 
     # Target the vs_profile subplot; fall back to active/first
     vs_plot = canvas._plots.get("vs_profile")
@@ -47,7 +48,7 @@ def add_vs_profile(canvas, prof_data: VsProfileData):
     if prof_data.percentile_layer.visible and prof_data.depth_grid is not None:
         c = pg.mkColor(prof_data.percentile_layer.color)
         c.setAlpha(prof_data.percentile_layer.alpha)
-        dg = prof_data.depth_grid
+        dg = prof_data.depth_grid * convert
         mask = dg <= depth_max
         fill_low = pg.PlotDataItem(prof_data.p_low[mask] * convert, dg[mask])
         fill_high = pg.PlotDataItem(prof_data.p_high[mask] * convert, dg[mask])
@@ -78,7 +79,7 @@ def add_vs_profile(canvas, prof_data: VsProfileData):
             if not np.any(finite_mask):
                 continue
             last_valid = np.max(np.where(finite_mask)[0])
-            d_plot = d[:last_valid + 1].copy()
+            d_plot = (d[:last_valid + 1] * convert).copy()
             v_plot = (v[:last_valid + 1] * convert).copy()
             if d_plot[-1] < depth_max:
                 d_plot = np.append(d_plot, depth_max)
@@ -100,7 +101,7 @@ def add_vs_profile(canvas, prof_data: VsProfileData):
             color=prof_data.median_layer.color,
             width=prof_data.median_layer.line_width,
         )
-        md = prof_data.median_depth_paired.copy()
+        md = (prof_data.median_depth_paired * convert).copy()
         mv = (prof_data.median_vel_paired * convert).copy()
         finite_mask = np.isfinite(md) & (md > 0)
         if np.any(finite_mask):
@@ -144,7 +145,7 @@ def add_vs_profile(canvas, prof_data: VsProfileData):
     # --- Sigma_ln subplot ---
     if (sig_plot and prof_data.sigma_layer.visible
             and prof_data.sigma_ln is not None):
-        dg = prof_data.depth_grid
+        dg = prof_data.depth_grid * convert
         mask = dg <= depth_max
         sig_pen = pg.mkPen(
             color=prof_data.sigma_layer.color,

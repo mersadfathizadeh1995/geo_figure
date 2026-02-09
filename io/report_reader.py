@@ -476,10 +476,14 @@ def extract_vs_profiles(
     misfit_max: float = 1.0,
     n_max_models: int = 1000,
     depth_max: Optional[float] = None,
-) -> List[Tuple[np.ndarray, np.ndarray]]:
+) -> Tuple[List[Tuple[np.ndarray, np.ndarray]], str]:
     """Full pipeline: extract from .report -> parse -> return profiles list.
 
     Each profile is a (depth_array, velocity_array) tuple in paired format.
+    Also returns the raw gpprofile output text.
+
+    Returns:
+        (profiles_list, raw_text)
     """
     key_markers = {"vs": "Vs", "vp": "Vp", "rho": "Density"}
     marker = key_markers.get(profile_type, "Vs")
@@ -495,4 +499,4 @@ def extract_vs_profiles(
         n_max_models=n_max_models,
         depth_max=depth_max,
     )
-    return parse_profile_output(text, marker)
+    return parse_profile_output(text, marker), text

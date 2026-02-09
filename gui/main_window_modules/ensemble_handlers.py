@@ -310,6 +310,11 @@ class EnsembleHandlersMixin:
         units = params.get("units", "m")
         self._save_profile_csv(prof, units=units)
 
+        # Save raw gpprofile output text to Vs folder
+        raw_text = params.get("raw_text", "")
+        if raw_text:
+            self._save_raw_profile_txt(ptype_label, raw_text)
+
         vs30_str = f"Vs30={prof.vs30_mean:.1f} m/s" if prof.vs30_mean else ""
         self.log_panel.log_success(
             f"{ptype_label} Profile: {len(profiles)} models extracted. {vs30_str}"
@@ -475,6 +480,78 @@ class EnsembleHandlersMixin:
             fpath = vs_dir / f"{name}_stats.csv"
             df_stats.to_csv(fpath, index=False, float_format="%.6f")
             self.log_panel.log_info(f"Saved: {fpath.name} (Excel failed: {exc})")
+
+        # ── 4. VsN histogram ──
+        self._save_vsn_histogram(prof, vs_dir, name, units)
+
+    def _save_vsn_histogram(self, prof, vs_dir, name, units="m"):
+        """Save VsN histogram (Vs30 or Vs100) as PNG to the Vs output dir."""
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.ticker as mtick
+
+        vsn_label = "Vs100" if units == "ft" else "Vs30"
+        vsn_unit = "ft/s" if units == "ft" else "m/s"
+        vsn_arr = prof.vs100_values if units == "ft" else prof.vs30_values
+
+        if vsn_arr is None or len(vsn_arr) == 0:
+            return
+        vsn_finite = vsn_arr[np.isfinite(vsn_arr)]
+        if len(vsn_finite) == 0:
+            return
+
+        fig, ax = plt.subplots(figsize=(10, 7))
+        ax.hist(
+            vsn_finite, bins=15,
+            edgecolor="black", alpha=0.7, color="white", linewidth=1.2,
+        )
+
+        mean_v = np.mean(vsn_finite)
+        std_v = np.std(vsn_finite)
+        stats_text = (
+            f"Mean: {mean_v:.0f} {vsn_unit}\n"
+            f"Std: {std_v:.0f} {vsn_unit}\n"
+            f"N: {len(vsn_finite)}"
+        )
+        ax.text(
+            0.75, 0.75, stats_text,
+            transform=ax.transAxes,
+            bbox=dict(boxstyle="round", facecolor="white",
+                      edgecolor="black", alpha=0.9),
+            fontsize=11, verticalalignment="top",
+        )
+
+        ax.set_xlabel(f"{vsn_label} ({vsn_unit})", fontsize=14)
+        ax.set_ylabel("Count", fontsize=14)
+        ax.set_title(f"{vsn_label} Distribution", fontsize=16, pad=15)
+        ax.tick_params(direction="in", which="both", length=4)
+        ax.grid(True, alpha=0.3)
+        for spine in ax.spines.values():
+            spine.set_color("black")
+            spine.set_linewidth(1.0)
+
+        plt.tight_layout()
+
+        fpath = vs_dir / f"{name}_{vsn_label}_histogram.png"
+        fig.savefig(fpath, dpi=300, bbox_inches="tight",
+                    facecolor="white", edgecolor="none")
+        plt.close(fig)
+        self.log_panel.log_info(f"Saved: {fpath.name}")
+
+    def _save_raw_profile_txt(self, ptype_label, raw_text):
+        """Save the raw gpprofile output text to the Vs output dir."""
+        from pathlib import Path
+        project_dir = getattr(self, '_project_dir', None)
+        if not project_dir or not raw_text:
+            return
+        vs_dir = Path(project_dir) / "Vs"
+        vs_dir.mkdir(parents=True, exist_ok=True)
+        name = ptype_label.replace(" ", "_")
+        fpath = vs_dir / f"{name}_gpprofile_raw.txt"
+        fpath.write_text(raw_text, encoding="utf-8")
+        self.log_panel.log_info(f"Saved: {fpath.name}")
 
     def _on_vs_profile_layer_toggled(self, uid: str, layer_name: str, visible: bool):
         """Toggle visibility of a Vs profile layer."""
