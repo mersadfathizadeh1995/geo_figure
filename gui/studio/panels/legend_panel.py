@@ -1,7 +1,7 @@
 """Legend settings panel — single control set applied to checked subplots."""
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QFormLayout, QDoubleSpinBox, QSpinBox,
-    QComboBox, QCheckBox, QScrollArea, QToolButton, QHBoxLayout,
+    QComboBox, QCheckBox, QScrollArea, QToolButton, QHBoxLayout, QLabel,
 )
 from PySide6.QtCore import Signal, Qt
 from geo_figure.gui.studio.models import LegendConfig
@@ -150,6 +150,14 @@ class LegendPanel(QWidget):
         scale_form.addRow("Legend Scale:", self.legend_scale_spin)
 
         layout.addWidget(scale_sec)
+
+        # -- Per-item legend visibility --
+        items_sec = CollapsibleSection("Legend Items")
+        self._items_layout = QVBoxLayout(items_sec.content)
+        self._items_layout.setContentsMargins(8, 2, 4, 2)
+        self._items_layout.setSpacing(2)
+        layout.addWidget(items_sec)
+
         layout.addStretch()
 
         # Connect value-change signals
@@ -162,6 +170,7 @@ class LegendPanel(QWidget):
             w.valueChanged.connect(self._on_value_changed)
 
         self._subplot_checks: list[tuple[str, QCheckBox]] = []
+        self._item_checks: list[tuple[str, str, QCheckBox]] = []  # (subplot_key, label, cb)
         self._settings = None
         self._updating = False
         self._active_key = ""  # key currently loaded into controls
@@ -200,6 +209,54 @@ class LegendPanel(QWidget):
     def sync_all(self):
         """Save current control values to all checked subplots."""
         self._save_to_checked()
+
+    def set_legend_items(self, labels_per_subplot: dict, subplot_names: dict):
+        """Populate the Legend Items section with per-subplot label checkboxes.
+
+        Parameters
+        ----------
+        labels_per_subplot : dict
+            {subplot_key: [label_str, ...]} from renderer.collect_legend_labels()
+        subplot_names : dict
+            {subplot_key: display_name} for section headers
+        """
+        # Clear old checkboxes
+        for _key, _label, cb in self._item_checks:
+            self._items_layout.removeWidget(cb)
+            cb.deleteLater()
+        self._item_checks.clear()
+
+        # Remove old header labels
+        while self._items_layout.count():
+            child = self._items_layout.takeAt(0)
+            w = child.widget()
+            if w:
+                w.deleteLater()
+
+        if not labels_per_subplot:
+            return
+
+        self._updating = True
+        for key, labels in labels_per_subplot.items():
+            name = subplot_names.get(key, key)
+            # Subplot header
+            header = QLabel(f"  {name}")
+            header.setStyleSheet("font-weight: bold; color: #555; margin-top: 4px;")
+            self._items_layout.addWidget(header)
+
+            lc = self._settings.legend_for(key) if self._settings else None
+            hidden = set(lc.hidden_labels) if lc and lc.hidden_labels else set()
+
+            for label in labels:
+                cb = QCheckBox(label)
+                cb.setChecked(label not in hidden)
+                cb.setProperty("subplot_key", key)
+                cb.setProperty("label_text", label)
+                cb.stateChanged.connect(self._on_item_toggled)
+                self._items_layout.addWidget(cb)
+                self._item_checks.append((key, label, cb))
+
+        self._updating = False
 
     # -- Internal -------------------------------------------------------------
 
@@ -274,6 +331,30 @@ class LegendPanel(QWidget):
             # Apply current controls to newly checked subplot too
             self._save_to_checked()
             self.changed.emit()
+
+    def _on_item_toggled(self, state):
+        """When a legend item checkbox is toggled, update hidden_labels."""
+        if self._updating or not self._settings:
+            return
+        cb = self.sender()
+        if not cb:
+            return
+        key = cb.property("subplot_key")
+        label = cb.property("label_text")
+        if not key or not label:
+            return
+        lc = self._settings.legend_for(key)
+        if lc.hidden_labels is None:
+            lc.hidden_labels = []
+        if state:
+            # Checked = visible: remove from hidden
+            if label in lc.hidden_labels:
+                lc.hidden_labels.remove(label)
+        else:
+            # Unchecked = hidden: add to hidden
+            if label not in lc.hidden_labels:
+                lc.hidden_labels.append(label)
+        self.changed.emit()
 
     def _select_all(self):
         self._updating = True

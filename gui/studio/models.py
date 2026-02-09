@@ -4,7 +4,7 @@ Defines all settings dataclasses that control figure rendering.
 These are pure data containers with no Qt dependencies.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, List
 
 
 @dataclass
@@ -82,6 +82,7 @@ class LegendConfig:
     shadow: bool = False
     title: str = ""
     markerscale: float = 1.0             # scale for legend markers/lines
+    hidden_labels: Optional[List[str]] = None  # labels to hide from legend
 
 
 @dataclass

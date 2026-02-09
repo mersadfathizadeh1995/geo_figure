@@ -41,9 +41,10 @@ def add_ensemble(canvas, ensemble: EnsembleData):
         env_fill.setVisible(env.visible)
         plot.addItem(env_fill)
         env_items.append(env_fill)
+        env_label = env.legend_label or "Theoretical Range"
         env_ghost = pg.PlotDataItem(
             [], [], pen=pg.mkPen(QColor(env.color), width=6),
-            name="Theoretical Range",
+            name=env_label,
         )
         env_ghost.setVisible(env.visible)
         plot.addItem(env_ghost)
@@ -64,9 +65,10 @@ def add_ensemble(canvas, ensemble: EnsembleData):
         pct_fill.setVisible(pct.visible)
         plot.addItem(pct_fill)
         pct_items.append(pct_fill)
+        pct_label = pct.legend_label or "16-84 Percentile"
         pct_ghost = pg.PlotDataItem(
             [], [], pen=pg.mkPen(QColor(pct.color), width=6),
-            name="16-84 Percentile",
+            name=pct_label,
         )
         pct_ghost.setVisible(pct.visible)
         plot.addItem(pct_ghost)
@@ -92,9 +94,10 @@ def add_ensemble(canvas, ensemble: EnsembleData):
             plot.addItem(line)
             ind_items.append(line)
         n_total = len(ensemble.individual_freqs)
+        ind_label = ind.legend_label or f"{n_total} Profiles"
         ind_ghost = pg.PlotDataItem(
             [], [], pen=pg.mkPen(QColor(ind.color), width=ind.line_width),
-            name=f"{n_total} Profiles",
+            name=ind_label,
         )
         ind_ghost.setVisible(ind.visible)
         plot.addItem(ind_ghost)
@@ -106,8 +109,7 @@ def add_ensemble(canvas, ensemble: EnsembleData):
     med_items = []
     if ensemble.median is not None:
         med_pen = pg.mkPen(QColor(med.color), width=med.line_width)
-        med_label = (f"Median ({ensemble.display_name})"
-                     if ensemble.display_name else "Median")
+        med_label = med.legend_label or "Median"
         med_line = plot.plot(
             log_freq, ensemble.median * vf, pen=med_pen,
             name=med_label,

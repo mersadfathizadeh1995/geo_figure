@@ -333,6 +333,12 @@ class StudioWindow(QMainWindow):
             self._canvas.setFixedSize(w_px, h_px)
 
             self._canvas.draw_idle()
+
+            # Update legend items panel with discovered labels
+            labels_map = self._renderer.collect_legend_labels()
+            subplot_names = dict(self._state.subplot_names)
+            self._legend_panel.set_legend_items(labels_map, subplot_names)
+
             self._status.showMessage("Ready", 3000)
         except Exception as e:
             self._status.showMessage(f"Render error: {e}")

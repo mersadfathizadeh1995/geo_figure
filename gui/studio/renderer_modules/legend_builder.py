@@ -31,6 +31,16 @@ def configure_legend(ax, subplot_key: str, settings: StudioSettings):
         handles = handles + extra
         labels = labels + [h.get_label() for h in extra]
 
+    # Filter out hidden labels
+    hidden = set(lc.hidden_labels) if lc.hidden_labels else set()
+    if hidden:
+        filtered = [(h, l) for h, l in zip(handles, labels) if l not in hidden]
+        if filtered:
+            handles, labels = zip(*filtered)
+            handles, labels = list(handles), list(labels)
+        else:
+            handles, labels = [], []
+
     if not handles:
         return
 
@@ -91,6 +101,17 @@ def create_outside_legend(
             if sh:
                 handles = handles + sh
                 labels = labels + sl
+
+        # Filter out hidden labels
+        hidden = set(lc.hidden_labels) if lc.hidden_labels else set()
+        if hidden:
+            filtered = [(h, l) for h, l in zip(handles, labels)
+                        if l not in hidden]
+            if filtered:
+                handles, labels = zip(*filtered)
+                handles, labels = list(handles), list(labels)
+            else:
+                handles, labels = [], []
 
         if handles:
             name = state.subplot_names.get(key, key)

@@ -86,8 +86,10 @@ class CurveData:
 
     @property
     def display_name(self) -> str:
-        base = self.custom_name if self.custom_name else self.name
+        if self.custom_name:
+            return self.custom_name
         mode_str = f" M{self.mode}" if self.mode > 0 else ""
+        base = self.name
         return f"{base}{mode_str}" if base else f"{self.curve_type.value}{mode_str}"
 
     def velocity_from_slowness(self):
@@ -104,6 +106,7 @@ class EnsembleLayer:
     color: str = "#888888"
     alpha: int = 255      # 0-255
     line_width: float = 2.0
+    legend_label: str = ""  # user-editable legend text; empty = use default
 
 
 @dataclass

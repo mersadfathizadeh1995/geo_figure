@@ -42,6 +42,10 @@ class EnsembleSectionMixin:
 
         # Median layer
         ens_style_layout.addRow(QLabel("-- Median --"))
+        self.ens_med_legend = QLineEdit()
+        self.ens_med_legend.setPlaceholderText("Median")
+        self.ens_med_legend.editingFinished.connect(self._on_ens_changed)
+        ens_style_layout.addRow("Legend:", self.ens_med_legend)
         med_row = QHBoxLayout()
         self.ens_med_color_btn = QPushButton()
         self.ens_med_color_btn.setFixedSize(28, 28)
@@ -60,6 +64,10 @@ class EnsembleSectionMixin:
 
         # Percentile band
         ens_style_layout.addRow(QLabel("-- 16-84 Percentile --"))
+        self.ens_pct_legend = QLineEdit()
+        self.ens_pct_legend.setPlaceholderText("16-84 Percentile")
+        self.ens_pct_legend.editingFinished.connect(self._on_ens_changed)
+        ens_style_layout.addRow("Legend:", self.ens_pct_legend)
         pct_row = QHBoxLayout()
         self.ens_pct_color_btn = QPushButton()
         self.ens_pct_color_btn.setFixedSize(28, 28)
@@ -78,6 +86,10 @@ class EnsembleSectionMixin:
 
         # Envelope
         ens_style_layout.addRow(QLabel("-- Envelope --"))
+        self.ens_env_legend = QLineEdit()
+        self.ens_env_legend.setPlaceholderText("Theoretical Range")
+        self.ens_env_legend.editingFinished.connect(self._on_ens_changed)
+        ens_style_layout.addRow("Legend:", self.ens_env_legend)
         env_row = QHBoxLayout()
         self.ens_env_color_btn = QPushButton()
         self.ens_env_color_btn.setFixedSize(28, 28)
@@ -96,6 +108,10 @@ class EnsembleSectionMixin:
 
         # Individual curves
         ens_style_layout.addRow(QLabel("-- Individual Curves --"))
+        self.ens_ind_legend = QLineEdit()
+        self.ens_ind_legend.setPlaceholderText("Profiles")
+        self.ens_ind_legend.editingFinished.connect(self._on_ens_changed)
+        ens_style_layout.addRow("Legend:", self.ens_ind_legend)
         ind_row = QHBoxLayout()
         self.ens_ind_color_btn = QPushButton()
         self.ens_ind_color_btn.setFixedSize(28, 28)
@@ -144,12 +160,16 @@ class EnsembleSectionMixin:
         # Layer styles
         self._set_ens_color_btn(self.ens_med_color_btn, ens.median_layer.color)
         self.ens_med_width.setValue(ens.median_layer.line_width)
+        self.ens_med_legend.setText(ens.median_layer.legend_label)
         self._set_ens_color_btn(self.ens_pct_color_btn, ens.percentile_layer.color)
         self.ens_pct_alpha.setValue(round(ens.percentile_layer.alpha * 100 / 255))
+        self.ens_pct_legend.setText(ens.percentile_layer.legend_label)
         self._set_ens_color_btn(self.ens_env_color_btn, ens.envelope_layer.color)
         self.ens_env_alpha.setValue(round(ens.envelope_layer.alpha * 100 / 255))
+        self.ens_env_legend.setText(ens.envelope_layer.legend_label)
         self._set_ens_color_btn(self.ens_ind_color_btn, ens.individual_layer.color)
         self.ens_ind_alpha.setValue(round(ens.individual_layer.alpha * 100 / 255))
+        self.ens_ind_legend.setText(ens.individual_layer.legend_label)
         self.ens_max_ind.setValue(ens.max_individual)
 
     # ── Ensemble handlers ────────────────────────────────────────
@@ -193,9 +213,13 @@ class EnsembleSectionMixin:
         ens = self._current_ensemble
         ens.custom_name = self.ens_name_edit.text().strip()
         ens.median_layer.line_width = self.ens_med_width.value()
+        ens.median_layer.legend_label = self.ens_med_legend.text().strip()
         ens.percentile_layer.alpha = round(self.ens_pct_alpha.value() * 255 / 100)
+        ens.percentile_layer.legend_label = self.ens_pct_legend.text().strip()
         ens.envelope_layer.alpha = round(self.ens_env_alpha.value() * 255 / 100)
+        ens.envelope_layer.legend_label = self.ens_env_legend.text().strip()
         ens.individual_layer.alpha = round(self.ens_ind_alpha.value() * 255 / 100)
+        ens.individual_layer.legend_label = self.ens_ind_legend.text().strip()
         ens.max_individual = self.ens_max_ind.value()
         self._emit_ens_update()
 

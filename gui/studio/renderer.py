@@ -102,6 +102,30 @@ class MplRenderer:
             self._outside_legend, self._settings, path, dpi, **save_kwargs,
         )
 
+    def collect_legend_labels(self) -> Dict[str, list]:
+        """Return available legend labels per subplot key.
+
+        Call after render() to discover which labels exist in each subplot.
+        """
+        result = {}
+        axes_map = getattr(self, "_axes_map", {})
+        for key, ax in axes_map.items():
+            if key.endswith("_sigma") or key == "sigma_ln":
+                continue
+            _, labels = ax.get_legend_handles_labels()
+            extra = getattr(ax, "legend_handles", [])
+            if extra:
+                labels = labels + [h.get_label() for h in extra]
+            sig_key = "sigma_ln" if key == "vs_profile" else f"{key}_sigma"
+            sig_ax = axes_map.get(sig_key)
+            if sig_ax is not None:
+                _, sl = sig_ax.get_legend_handles_labels()
+                if sl:
+                    labels = labels + sl
+            if labels:
+                result[key] = labels
+        return result
+
     # ── rcParams ──────────────────────────────────────────────────
 
     def _apply_rcparams(self):

@@ -180,19 +180,21 @@ def _render_ensemble(ax, ens: EnsembleData, vf: float):
     env = ens.envelope_layer
     if env.visible and ens.envelope_min is not None:
         c = matplotlib.colors.to_rgba(env.color, alpha=env.alpha / 255.0)
+        env_label = env.legend_label or "Theoretical Range"
         ax.fill_between(
             freq, ens.envelope_min * vf, ens.envelope_max * vf,
             color=c, edgecolor="k", linewidth=0.3, zorder=1,
-            label="Theoretical Range",
+            label=env_label,
         )
 
     # 2. Percentile band
     pct = ens.percentile_layer
     if pct.visible and ens.p_low is not None:
         c = matplotlib.colors.to_rgba(pct.color, alpha=pct.alpha / 255.0)
+        pct_label = pct.legend_label or "16-84 Percentile"
         ax.fill_between(
             freq, ens.p_low * vf, ens.p_high * vf,
-            color=c, zorder=2, label="16-84 Percentile",
+            color=c, zorder=2, label=pct_label,
         )
 
     # 3. Individual spaghetti
@@ -208,17 +210,17 @@ def _render_ensemble(ax, ens: EnsembleData, vf: float):
                 color=c, linewidth=ind.line_width, zorder=1,
             )
         n_total = len(ens.individual_freqs)
+        ind_label = ind.legend_label or f"{n_total} Profiles"
         ax.plot([], [], color=ind.color, linewidth=ind.line_width,
                 alpha=ind.alpha / 255.0,
-                label=f"{n_total} Profiles")
+                label=ind_label)
 
     # 4. Median (top, bold)
     med = ens.median_layer
     if med.visible and ens.median is not None:
-        median_label = (f"Median ({ens.display_name})"
-                        if ens.display_name else "Median")
+        med_label = med.legend_label or "Median"
         ax.semilogx(
             freq, ens.median * vf,
             color=med.color, linewidth=med.line_width,
-            label=median_label, zorder=5,
+            label=med_label, zorder=5,
         )
