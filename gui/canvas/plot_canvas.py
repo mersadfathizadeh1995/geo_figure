@@ -300,6 +300,25 @@ class PlotCanvas(QWidget):
             "mode": self._legend_mode,
         }
 
+    def apply_canvas_config(self, config):
+        """Restore canvas display settings from a CanvasConfig object."""
+        self._legend_visible = getattr(config, 'legend_visible', True)
+        self._legend_pos = getattr(config, 'legend_position', 'top-right')
+        self._legend_offset = getattr(config, 'legend_offset', (-10, 10))
+        self._legend_font_size = getattr(config, 'legend_font_size', 9)
+        self._legend_mode = getattr(config, 'legend_mode', 'per_subplot')
+        vs_ratios = getattr(config, 'vs_internal_ratios', (0.75, 0.25))
+        self._vs_internal_ratios = tuple(vs_ratios)
+        self.set_legend_visible(self._legend_visible)
+        self.set_legend_position(self._legend_pos, self._legend_offset)
+        self.set_legend_font_size(self._legend_font_size)
+        # Apply axis ranges after data is loaded
+        axis_ranges = getattr(config, 'axis_ranges', {})
+        for key, ((xmin, xmax), (ymin, ymax)) in axis_ranges.items():
+            if key in self._plots:
+                self._plots[key].setXRange(xmin, xmax, padding=0)
+                self._plots[key].setYRange(ymin, ymax, padding=0)
+
     def _apply_legend_mode(self):
         """After rebuild, rearrange legends according to the current mode."""
         if not self._legend_visible or not self._legends:

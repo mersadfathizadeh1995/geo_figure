@@ -358,66 +358,172 @@ class FigureState:
             "subplot_types": dict(self.subplot_types),
         }
 
-    def save(self, filepath: str):
-        """Persist the full figure state (pickle) for later rendering."""
-        import pickle
-        data = {
+    # ── Serialization helpers ────────────────────────────────
+
+    @staticmethod
+    def _layer_to_dict(layer: "EnsembleLayer") -> dict:
+        return {
+            "visible": layer.visible, "color": layer.color,
+            "alpha": layer.alpha, "line_width": layer.line_width,
+            "legend_label": layer.legend_label,
+        }
+
+    @staticmethod
+    def _layer_from_dict(d: dict) -> "EnsembleLayer":
+        if d is None:
+            return EnsembleLayer()
+        return EnsembleLayer(
+            visible=d.get("visible", True),
+            color=d.get("color", "#888888"),
+            alpha=d.get("alpha", 255),
+            line_width=d.get("line_width", 2.0),
+            legend_label=d.get("legend_label", ""),
+        )
+
+    def _serialize_curve(self, c: "CurveData") -> dict:
+        return {
+            "uid": c.uid, "name": c.name, "custom_name": c.custom_name,
+            "curve_type": c.curve_type, "wave_type": c.wave_type,
+            "source_type": c.source_type, "mode": c.mode,
+            "frequency": c.frequency, "velocity": c.velocity,
+            "slowness": c.slowness, "stddev": c.stddev,
+            "subplot_key": c.subplot_key, "color": c.color,
+            "line_width": c.line_width, "marker_size": c.marker_size,
+            "show_error_bars": c.show_error_bars, "visible": c.visible,
+            "point_mask": c.point_mask,
+            "resample_enabled": c.resample_enabled,
+            "resample_n_points": c.resample_n_points,
+            "resample_method": c.resample_method,
+            "stddev_type": c.stddev_type,
+            "stddev_mode": c.stddev_mode,
+            "fixed_logstd": c.fixed_logstd, "fixed_cov": c.fixed_cov,
+            "stddev_ranges": c.stddev_ranges,
+            "filepath": c.filepath,
+        }
+
+    def _serialize_ensemble(self, e: "EnsembleData") -> dict:
+        return {
+            "uid": e.uid, "name": e.name, "custom_name": e.custom_name,
+            "wave_type": e.wave_type, "mode": e.mode,
+            "n_profiles": e.n_profiles, "subplot_key": e.subplot_key,
+            "freq": e.freq, "median": e.median,
+            "p_low": e.p_low, "p_high": e.p_high,
+            "envelope_min": e.envelope_min, "envelope_max": e.envelope_max,
+            "sigma_ln": e.sigma_ln,
+            "individual_freqs": e.individual_freqs,
+            "individual_vels": e.individual_vels,
+            "max_individual": e.max_individual,
+            "median_layer": self._layer_to_dict(e.median_layer),
+            "percentile_layer": self._layer_to_dict(e.percentile_layer),
+            "envelope_layer": self._layer_to_dict(e.envelope_layer),
+            "individual_layer": self._layer_to_dict(e.individual_layer),
+        }
+
+    def _serialize_vs_profile(self, p: "VsProfileData") -> dict:
+        return {
+            "uid": p.uid, "name": p.name, "custom_name": p.custom_name,
+            "profile_type": p.profile_type, "subplot_key": p.subplot_key,
+            "profiles": p.profiles, "depth_grid": p.depth_grid,
+            "median": p.median, "p_low": p.p_low, "p_high": p.p_high,
+            "sigma_ln": p.sigma_ln,
+            "median_depth_paired": p.median_depth_paired,
+            "median_vel_paired": p.median_vel_paired,
+            "vs30_values": p.vs30_values, "vs100_values": p.vs100_values,
+            "n_profiles": p.n_profiles, "depth_max_plot": p.depth_max_plot,
+            "max_individual": p.max_individual,
+            "median_layer": self._layer_to_dict(p.median_layer),
+            "percentile_layer": self._layer_to_dict(p.percentile_layer),
+            "individual_layer": self._layer_to_dict(p.individual_layer),
+            "sigma_layer": self._layer_to_dict(p.sigma_layer),
+        }
+
+    # ── Save / Load ───────────────────────────────────────────
+
+    def serialize(self) -> dict:
+        """Return the full state as a pickle-ready dict (no file I/O)."""
+        return {
+            "version": 2,
             "layout_mode": self.layout_mode,
             "grid_rows": self.grid_rows,
             "grid_cols": self.grid_cols,
+            "grid_col_ratios": list(self.grid_col_ratios),
             "link_y": self.link_y,
             "link_x": self.link_x,
             "subplot_names": dict(self.subplot_names),
             "subplot_types": dict(self.subplot_types),
             "theme": self.theme,
             "velocity_unit": self.velocity_unit,
-            "curves": [],
-            "ensembles": [],
-            "vs_profiles": [],
+            "curves": [self._serialize_curve(c) for c in self.curves],
+            "ensembles": [self._serialize_ensemble(e) for e in self.ensembles],
+            "vs_profiles": [self._serialize_vs_profile(p) for p in self.vs_profiles],
         }
-        for c in self.curves:
-            data["curves"].append({
-                "uid": c.uid, "name": c.name, "custom_name": c.custom_name,
-                "curve_type": c.curve_type, "wave_type": c.wave_type,
-                "source_type": c.source_type, "mode": c.mode,
-                "frequency": c.frequency, "velocity": c.velocity,
-                "slowness": c.slowness, "stddev": c.stddev,
-                "subplot_key": c.subplot_key, "color": c.color,
-                "line_width": c.line_width, "marker_size": c.marker_size,
-                "show_error_bars": c.show_error_bars, "visible": c.visible,
-                "point_mask": c.point_mask,
-                "resample_enabled": c.resample_enabled,
-                "resample_n_points": c.resample_n_points,
-                "fixed_logstd": c.fixed_logstd, "fixed_cov": c.fixed_cov,
-                "stddev_ranges": c.stddev_ranges,
-            })
-        for e in self.ensembles:
-            data["ensembles"].append({
-                "uid": e.uid, "name": e.name, "custom_name": e.custom_name,
-                "wave_type": e.wave_type, "mode": e.mode,
-                "n_profiles": e.n_profiles, "subplot_key": e.subplot_key,
-                "freq": e.freq, "median": e.median,
-                "p_low": e.p_low, "p_high": e.p_high,
-                "envelope_min": e.envelope_min, "envelope_max": e.envelope_max,
-                "sigma_ln": e.sigma_ln,
-                "individual_freqs": e.individual_freqs,
-                "individual_vels": e.individual_vels,
-            })
-        for p in self.vs_profiles:
-            data["vs_profiles"].append({
-                "uid": p.uid, "name": p.name, "custom_name": p.custom_name,
-                "profile_type": p.profile_type, "subplot_key": p.subplot_key,
-                "profiles": p.profiles, "depth_grid": p.depth_grid,
-                "median": p.median, "p_low": p.p_low, "p_high": p.p_high,
-                "sigma_ln": p.sigma_ln,
-                "median_depth_paired": p.median_depth_paired,
-                "median_vel_paired": p.median_vel_paired,
-                "vs30_values": p.vs30_values, "vs100_values": p.vs100_values,
-                "n_profiles": p.n_profiles, "depth_max_plot": p.depth_max_plot,
-                "max_individual": p.max_individual,
-            })
+
+    def save(self, filepath: str):
+        """Persist the full figure state (pickle) for later rendering."""
+        import pickle
         with open(filepath, "wb") as f:
-            pickle.dump(data, f)
+            pickle.dump(self.serialize(), f)
+
+    @classmethod
+    def deserialize(cls, data: dict) -> "FigureState":
+        """Reconstruct a FigureState from a serialized dict."""
+        return cls(
+            layout_mode=data["layout_mode"],
+            grid_rows=data["grid_rows"],
+            grid_cols=data["grid_cols"],
+            grid_col_ratios=data.get("grid_col_ratios", []),
+            link_y=data["link_y"],
+            link_x=data["link_x"],
+            subplot_names=data.get("subplot_names", {}),
+            subplot_types=data.get("subplot_types", {}),
+            curves=[cls._load_curve(cd) for cd in data.get("curves", [])],
+            ensembles=[cls._load_ensemble(ed) for ed in data.get("ensembles", [])],
+            vs_profiles=[cls._load_vs_profile(pd_) for pd_ in data.get("vs_profiles", [])],
+            theme=data.get("theme", "light"),
+            velocity_unit=data.get("velocity_unit", "metric"),
+        )
+
+    @classmethod
+    def _load_curve(cls, cd: dict) -> "CurveData":
+        c = CurveData(uid=cd["uid"], name=cd["name"])
+        skip = {"uid", "name"}
+        for k, v in cd.items():
+            if k not in skip and hasattr(c, k):
+                setattr(c, k, v)
+        # Recalculate derived fields that __post_init__ set before frequency was loaded
+        if c.frequency is not None and len(c.frequency) > 0:
+            c.n_points = len(c.frequency)
+            c.freq_min = float(np.min(c.frequency))
+            c.freq_max = float(np.max(c.frequency))
+        return c
+
+    @classmethod
+    def _load_ensemble(cls, ed: dict) -> "EnsembleData":
+        e = EnsembleData(uid=ed["uid"], name=ed["name"])
+        layer_keys = {"median_layer", "percentile_layer",
+                      "envelope_layer", "individual_layer"}
+        skip = {"uid", "name"} | layer_keys
+        for k, v in ed.items():
+            if k not in skip and hasattr(e, k):
+                setattr(e, k, v)
+        for lk in layer_keys:
+            if lk in ed:
+                setattr(e, lk, cls._layer_from_dict(ed[lk]))
+        return e
+
+    @classmethod
+    def _load_vs_profile(cls, pd_: dict) -> "VsProfileData":
+        p = VsProfileData(uid=pd_.get("uid", ""), name=pd_.get("name", ""))
+        layer_keys = {"median_layer", "percentile_layer",
+                      "individual_layer", "sigma_layer"}
+        skip = {"uid", "name"} | layer_keys
+        for k, v in pd_.items():
+            if k not in skip and hasattr(p, k):
+                setattr(p, k, v)
+        for lk in layer_keys:
+            if lk in pd_:
+                setattr(p, lk, cls._layer_from_dict(pd_[lk]))
+        return p
 
     @classmethod
     def load(cls, filepath: str) -> "FigureState":
@@ -425,38 +531,4 @@ class FigureState:
         import pickle
         with open(filepath, "rb") as f:
             data = pickle.load(f)
-        curves = []
-        for cd in data.get("curves", []):
-            c = CurveData(uid=cd["uid"], name=cd["name"])
-            for k, v in cd.items():
-                if k not in ("uid", "name") and hasattr(c, k):
-                    setattr(c, k, v)
-            curves.append(c)
-        ensembles = []
-        for ed in data.get("ensembles", []):
-            e = EnsembleData(uid=ed["uid"], name=ed["name"])
-            for k, v in ed.items():
-                if k not in ("uid", "name") and hasattr(e, k):
-                    setattr(e, k, v)
-            ensembles.append(e)
-        vs_profiles = []
-        for pd in data.get("vs_profiles", []):
-            p = VsProfileData(uid=pd.get("uid", ""), name=pd.get("name", ""))
-            for k, v in pd.items():
-                if k not in ("uid", "name") and hasattr(p, k):
-                    setattr(p, k, v)
-            vs_profiles.append(p)
-        return cls(
-            layout_mode=data["layout_mode"],
-            grid_rows=data["grid_rows"],
-            grid_cols=data["grid_cols"],
-            link_y=data["link_y"],
-            link_x=data["link_x"],
-            subplot_names=data.get("subplot_names", {}),
-            subplot_types=data.get("subplot_types", {}),
-            curves=curves,
-            ensembles=ensembles,
-            vs_profiles=vs_profiles,
-            theme=data.get("theme", "light"),
-            velocity_unit=data.get("velocity_unit", "metric"),
-        )
+        return cls.deserialize(data)

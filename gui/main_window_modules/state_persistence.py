@@ -2,7 +2,7 @@
 import os
 
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 
 class StatePersistenceMixin:
@@ -222,3 +222,114 @@ class StatePersistenceMixin:
             "Geophysical Data Visualization Studio\n"
             "Built with PySide6 + PyQtGraph"
         )
+
+    # ── Sheet save/load ───────────────────────────────────────
+
+    def _on_save_sheet(self):
+        """Save the current sheet to the project sheets directory."""
+        from geo_figure.io.sheet_persistence import save_sheet
+        try:
+            canvas = self.sheet_tabs.get_current_canvas()
+            fig_state = self.capture_figure_state()
+            sheet_name = self.sheet_tabs.tabText(self._current_sheet_idx)
+            path = save_sheet(
+                str(self._project_dir), sheet_name, fig_state, canvas
+            )
+            self.log_panel.log_info(f"Sheet saved: {path}")
+        except Exception as e:
+            QMessageBox.warning(self, "Save Error", str(e))
+
+    def _on_save_all_sheets(self):
+        """Save every sheet tab to the project sheets directory."""
+        from geo_figure.io.sheet_persistence import save_sheet
+        saved = 0
+        for i in range(self.sheet_tabs.count()):
+            try:
+                canvas = self.sheet_tabs.widget(i)
+                fig_state = self.capture_figure_state_for_sheet(i)
+                sheet_name = self.sheet_tabs.tabText(i)
+                save_sheet(str(self._project_dir), sheet_name, fig_state, canvas)
+                saved += 1
+            except Exception:
+                pass
+        self.log_panel.log_info(f"Saved {saved} sheet(s)")
+
+    def _on_load_sheet(self):
+        """Load a sheet from a .gfs file or from the project sheets directory."""
+        from geo_figure.io.sheet_persistence import list_saved_sheets, load_sheet
+        sheets = list_saved_sheets(str(self._project_dir))
+        if sheets:
+            from PySide6.QtWidgets import QInputDialog
+            names = [s[0] for s in sheets]
+            name, ok = QInputDialog.getItem(
+                self, "Load Sheet",
+                "Select a saved sheet to load:", names, 0, False
+            )
+            if not ok:
+                return
+            filepath = next(s[1] for s in sheets if s[0] == name)
+        else:
+            filepath, _ = QFileDialog.getOpenFileName(
+                self, "Open Sheet File",
+                str(self._project_dir),
+                "GeoFigure Sheet (*.gfs);;All Files (*)"
+            )
+            if not filepath:
+                return
+        try:
+            self._restore_sheet_from_file(filepath)
+        except Exception as e:
+            QMessageBox.warning(self, "Load Error", str(e))
+
+    def _restore_sheet_from_file(self, filepath: str):
+        """Restore a full sheet from a .gfs file."""
+        from geo_figure.io.sheet_persistence import load_sheet
+        sheet_name, fig_state, canvas_config = load_sheet(filepath)
+
+        # Create new sheet tab
+        self.sheet_tabs.add_sheet(sheet_name)
+        new_idx = self.sheet_tabs.count() - 1
+        self._current_sheet_idx = new_idx
+        self._ensure_sheet_data(new_idx)
+        canvas = self.sheet_tabs.get_current_canvas()
+
+        # Apply layout
+        canvas._subplot_names = dict(fig_state.subplot_names)
+        canvas._subplot_types = dict(fig_state.subplot_types)
+        canvas._link_y = fig_state.link_y
+        canvas._link_x = fig_state.link_x
+        if fig_state.layout_mode == "grid":
+            canvas._grid_rows = fig_state.grid_rows
+            canvas._grid_cols = fig_state.grid_cols
+            canvas._grid_col_ratios = list(fig_state.grid_col_ratios) or [1.0] * fig_state.grid_cols
+            canvas._layout_mode = "grid"
+            canvas.rebuild()
+        elif fig_state.layout_mode != canvas.layout_mode:
+            canvas.set_layout_mode(fig_state.layout_mode)
+
+        # Set velocity unit
+        vel_unit = fig_state.velocity_unit or "metric"
+        self._sheet_data[new_idx]['velocity_unit'] = vel_unit
+        canvas.set_velocity_unit(vel_unit)
+
+        # Populate data
+        for curve in fig_state.curves:
+            self._curves[curve.uid] = curve
+            canvas.add_curve(curve)
+
+        for ens in fig_state.ensembles:
+            self._ensembles[ens.uid] = ens
+            canvas.add_ensemble(ens)
+
+        for prof in fig_state.vs_profiles:
+            self._vs_profiles[prof.uid] = prof
+            canvas.add_vs_profile(prof)
+
+        # Apply canvas display config (legend, axis ranges)
+        canvas.apply_canvas_config(canvas_config)
+
+        # Rebuild tree and auto-range
+        self._rebuild_tree()
+        canvas.auto_range()
+
+        self.log_panel.log_info(f"Sheet loaded: {sheet_name}")

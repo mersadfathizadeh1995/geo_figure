@@ -34,6 +34,19 @@ class MenuSetupMixin:
 
         file_menu.addSeparator()
 
+        save_sheet_action = file_menu.addAction("&Save Sheet...")
+        save_sheet_action.setShortcut(QKeySequence("Ctrl+S"))
+        save_sheet_action.triggered.connect(self._on_save_sheet)
+
+        load_sheet_action = file_menu.addAction("&Load Sheet...")
+        load_sheet_action.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        load_sheet_action.triggered.connect(self._on_load_sheet)
+
+        save_all_action = file_menu.addAction("Save &All Sheets")
+        save_all_action.triggered.connect(self._on_save_all_sheets)
+
+        file_menu.addSeparator()
+
         exit_action = file_menu.addAction("E&xit")
         exit_action.setShortcut(QKeySequence("Alt+F4"))
         exit_action.triggered.connect(self.close)
