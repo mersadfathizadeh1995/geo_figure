@@ -255,7 +255,7 @@ class StatePersistenceMixin:
         self.log_panel.log_info(f"Saved {saved} sheet(s)")
 
     def _on_load_sheet(self):
-        """Load a sheet from a .gfs file or from the project sheets directory."""
+        """Load a sheet from the project sheets directory or browse for one."""
         from geo_figure.io.sheet_persistence import list_saved_sheets, load_sheet
         sheets = list_saved_sheets(str(self._project_dir))
         if sheets:
@@ -267,22 +267,21 @@ class StatePersistenceMixin:
             )
             if not ok:
                 return
-            filepath = next(s[1] for s in sheets if s[0] == name)
+            sheet_path = next(s[1] for s in sheets if s[0] == name)
         else:
-            filepath, _ = QFileDialog.getOpenFileName(
-                self, "Open Sheet File",
+            sheet_path = QFileDialog.getExistingDirectory(
+                self, "Select Sheet Folder",
                 str(self._project_dir),
-                "GeoFigure Sheet (*.gfs);;All Files (*)"
             )
-            if not filepath:
+            if not sheet_path:
                 return
         try:
-            self._restore_sheet_from_file(filepath)
+            self._restore_sheet_from_file(sheet_path)
         except Exception as e:
             QMessageBox.warning(self, "Load Error", str(e))
 
     def _restore_sheet_from_file(self, filepath: str):
-        """Restore a full sheet from a .gfs file."""
+        """Restore a full sheet from a saved sheet folder."""
         from geo_figure.io.sheet_persistence import load_sheet
         sheet_name, fig_state, canvas_config = load_sheet(filepath)
 
