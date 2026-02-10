@@ -167,7 +167,9 @@ class StatePersistenceMixin:
 
             studio = StudioWindow(
                 fig_state, sheet_name=sheet_name,
-                canvas_ranges=canvas_ranges, parent=self,
+                canvas_ranges=canvas_ranges,
+                project_dir=str(getattr(self, '_project_dir', '')),
+                parent=self,
             )
             studio.setAttribute(QtCore_Qt.WA_DeleteOnClose)
             studio.show()

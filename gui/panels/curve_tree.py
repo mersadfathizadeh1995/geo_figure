@@ -172,6 +172,8 @@ class CurveTreePanel(QWidget):
         if not parent:
             return
 
+        self.tree.blockSignals(True)
+
         # Build label
         text = self._curve_label(curve)
         item = QTreeWidgetItem(parent, [text])
@@ -184,7 +186,6 @@ class CurveTreePanel(QWidget):
 
         # Per-point children for non-theoretical curves
         if curve.curve_type != CurveType.THEORETICAL and curve.has_data:
-            self.tree.blockSignals(True)
             for i in range(curve.n_points):
                 freq_val = curve.frequency[i]
                 vel_val = curve.velocity[i]
@@ -197,8 +198,9 @@ class CurveTreePanel(QWidget):
                 child.setFlags(child_flags)
                 mask_val = curve.point_mask[i] if curve.point_mask is not None else True
                 child.setCheckState(0, Qt.Checked if mask_val else Qt.Unchecked)
-            self.tree.blockSignals(False)
             item.setExpanded(False)
+
+        self.tree.blockSignals(False)
 
         self._curves[curve.uid] = item
         self._update_counts()

@@ -134,6 +134,10 @@ def add_curve(canvas, curve: CurveData):
         "error": error_item,
     }
 
+    # Respect the curve's stored visibility flag
+    if not curve.visible:
+        set_curve_visible(canvas, curve.uid, False)
+
 
 def remove_curve(canvas, uid: str):
     """Remove a curve from the canvas."""

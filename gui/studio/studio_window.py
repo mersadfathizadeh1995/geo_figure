@@ -40,7 +40,8 @@ class StudioWindow(QMainWindow):
     """Matplotlib Studio — renders a sheet's data as a publication figure."""
 
     def __init__(self, fig_state: FigureState, sheet_name: str = "",
-                 canvas_ranges: dict = None, parent=None):
+                 canvas_ranges: dict = None, project_dir: str = "",
+                 parent=None):
         """
         Parameters
         ----------
@@ -51,10 +52,13 @@ class StudioWindow(QMainWindow):
         canvas_ranges : dict, optional
             Per-subplot axis ranges from the PyQtGraph canvas.
             Format: {subplot_key: ((xmin, xmax), (ymin, ymax))}.
+        project_dir : str, optional
+            Project directory for saving/loading render configs.
         """
         super().__init__(parent)
         self._state = fig_state
         self._sheet_name = sheet_name or "Sheet"
+        self._project_dir = project_dir or ""
         self._settings = StudioSettings()
         self._renderer = MplRenderer()
         self._canvas_ranges = canvas_ranges or {}
@@ -178,6 +182,18 @@ class StudioWindow(QMainWindow):
 
         # File menu
         file_menu = menu_bar.addMenu("File")
+
+        save_cfg_act = QAction("Save Config...", self)
+        save_cfg_act.setShortcut(QKeySequence("Ctrl+S"))
+        save_cfg_act.triggered.connect(self._on_save_config)
+        file_menu.addAction(save_cfg_act)
+
+        load_cfg_act = QAction("Load Config...", self)
+        load_cfg_act.setShortcut(QKeySequence("Ctrl+O"))
+        load_cfg_act.triggered.connect(self._on_load_config)
+        file_menu.addAction(load_cfg_act)
+
+        file_menu.addSeparator()
         export_act = QAction("Export...", self)
         export_act.setShortcut(QKeySequence("Ctrl+E"))
         export_act.triggered.connect(
@@ -388,6 +404,127 @@ class StudioWindow(QMainWindow):
         """Reset all settings to defaults."""
         self._settings = StudioSettings()
         self._apply_preset("publication")
+
+    # ── Render config save/load ───────────────────────────────────
+
+    def _on_save_config(self):
+        """Save current studio settings to a named JSON config file."""
+        from PySide6.QtWidgets import QInputDialog, QFileDialog
+        from geo_figure.gui.studio.render_config import save_render_config
+
+        self._collect_settings()
+
+        if self._project_dir:
+            name, ok = QInputDialog.getText(
+                self, "Save Render Config",
+                "Config name:", text="Publication",
+            )
+            if not ok or not name.strip():
+                return
+            try:
+                path = save_render_config(
+                    self._project_dir, name.strip(), self._settings,
+                )
+                self._status.showMessage(
+                    f"Config saved: {name.strip()}", 4000,
+                )
+            except Exception as e:
+                QMessageBox.warning(self, "Save Error", str(e))
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                self, "Save Render Config", "",
+                "JSON Files (*.json);;All Files (*)",
+            )
+            if not path:
+                return
+            try:
+                import json
+                from geo_figure.gui.studio.render_config import settings_to_dict
+                data = settings_to_dict(self._settings)
+                data["_config_name"] = os.path.splitext(
+                    os.path.basename(path)
+                )[0]
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=2, ensure_ascii=False)
+                self._status.showMessage(f"Config saved: {path}", 4000)
+            except Exception as e:
+                QMessageBox.warning(self, "Save Error", str(e))
+
+    def _on_load_config(self):
+        """Load studio settings from a saved config file."""
+        from PySide6.QtWidgets import QFileDialog, QInputDialog
+        from geo_figure.gui.studio.render_config import (
+            load_render_config, list_render_configs,
+        )
+
+        filepath = None
+
+        if self._project_dir:
+            configs = list_render_configs(self._project_dir)
+            if configs:
+                names = [name for name, _ in configs]
+                names.append("Browse for file...")
+                choice, ok = QInputDialog.getItem(
+                    self, "Load Render Config", "Select config:", names,
+                    editable=False,
+                )
+                if not ok:
+                    return
+                if choice == "Browse for file...":
+                    filepath = self._browse_config_file()
+                else:
+                    for name, fpath in configs:
+                        if name == choice:
+                            filepath = fpath
+                            break
+            else:
+                filepath = self._browse_config_file()
+        else:
+            filepath = self._browse_config_file()
+
+        if not filepath:
+            return
+
+        try:
+            loaded = load_render_config(filepath)
+            self._settings = loaded
+            self._apply_loaded_settings()
+            config_name = os.path.splitext(os.path.basename(filepath))[0]
+            self._status.showMessage(
+                f"Config loaded: {config_name}", 4000,
+            )
+        except Exception as e:
+            QMessageBox.warning(self, "Load Error", str(e))
+
+    def _browse_config_file(self) -> str:
+        """Open a file dialog to browse for a config JSON file."""
+        from PySide6.QtWidgets import QFileDialog
+        start_dir = ""
+        if self._project_dir:
+            render_dir = os.path.join(self._project_dir, "render")
+            if os.path.isdir(render_dir):
+                start_dir = render_dir
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load Render Config", start_dir,
+            "JSON Files (*.json);;All Files (*)",
+        )
+        return path
+
+    def _apply_loaded_settings(self):
+        """Push loaded StudioSettings into all panels and re-render."""
+        self._figure_panel.read_from(self._settings.figure)
+        self._typography_panel.read_from(self._settings.typography)
+        self._legend_panel.read_from(self._settings.legend)
+
+        has_vs = bool(getattr(self._state, "vs_profiles", []))
+        if has_vs:
+            self._figure_panel.read_vs_from(self._settings)
+
+        subplot_info = self._get_subplot_info()
+        self._axis_panel.set_subplots(subplot_info, self._settings)
+        self._legend_panel.set_subplots(subplot_info, self._settings)
+
+        self._schedule_render()
 
     # ── Export ─────────────────────────────────────────────────────
 
