@@ -19,6 +19,9 @@ class MenuSetupMixin:
         open_theo = file_menu.addAction("Open &Theoretical DC...")
         open_theo.triggered.connect(self._on_open_theoretical)
 
+        load_vs = file_menu.addAction("Load &Vs Profile...")
+        load_vs.triggered.connect(self._on_load_vs_profile)
+
         file_menu.addSeparator()
 
         project_action = file_menu.addAction("&Project Directory...")

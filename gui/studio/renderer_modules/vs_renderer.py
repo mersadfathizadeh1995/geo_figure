@@ -40,6 +40,12 @@ def render_vs_subplot(
         if prof.sigma_layer.visible and prof.sigma_ln is not None:
             any_sigma_visible = True
 
+    # Render soil profiles on this subplot
+    soil_profs = getattr(state, "soil_profiles", []) or []
+    for sp in soil_profs:
+        if sp.subplot_key == subplot_key or sp.subplot_key == "main":
+            _render_one_soil_profile(ax_vs, sp, vf)
+
     # Configure Vs axis
     acfg = settings.axis_for(subplot_key)
     vs_label = acfg.x_label or VS_LABELS.get(state.velocity_unit, "Vs (m/s)")
@@ -223,4 +229,60 @@ def _configure_sigma_axis(ax_sig, sigma_key: str, settings: StudioSettings):
             frameon=lc.frame_on,
             framealpha=lc.frame_alpha,
             markerscale=(lc.markerscale or 1.0) * scale,
+        )
+
+
+# ── Soil profile rendering ───────────────────────────────────
+
+def _render_one_soil_profile(ax, sp, vf: float):
+    """Render a single SoilProfile as a step function on the given axes."""
+    if not sp.visible:
+        return
+    vals = sp.active_values
+    if vals is None or len(vals) == 0:
+        return
+
+    convert = vf
+    depth_arr, val_arr, hs_depth, hs_val = sp.to_step_arrays()
+
+    display_name = sp.custom_name or sp.name
+    color = sp.color
+    alpha_frac = sp.alpha / 255.0
+
+    # Main step curve
+    ax.plot(
+        val_arr * convert, depth_arr * convert,
+        color=color, linewidth=sp.line_width, alpha=alpha_frac,
+        label=display_name, zorder=2, solid_capstyle="butt",
+    )
+
+    # Halfspace dashed extension
+    if hs_depth is not None and hs_val is not None:
+        ax.plot(
+            hs_val * convert, hs_depth * convert,
+            color=color, linewidth=sp.line_width, alpha=alpha_frac,
+            linestyle="--", zorder=2,
+        )
+
+    # Uncertainty bands
+    if (sp.show_uncertainty
+            and sp.vs_low is not None and sp.vs_high is not None):
+        n = len(sp.vs_low)
+        d_step = []
+        low_step = []
+        high_step = []
+        for i in range(n):
+            t = sp.top_depth[i] * convert
+            b = sp.bot_depth[i]
+            if np.isinf(b):
+                b = sp.max_depth * (1 + sp.halfspace_extension) * convert
+            else:
+                b *= convert
+            d_step.extend([t, b])
+            low_step.extend([sp.vs_low[i] * convert, sp.vs_low[i] * convert])
+            high_step.extend([sp.vs_high[i] * convert, sp.vs_high[i] * convert])
+
+        ax.fill_betweenx(
+            d_step, low_step, high_step,
+            color=color, alpha=alpha_frac * 0.2, zorder=1,
         )

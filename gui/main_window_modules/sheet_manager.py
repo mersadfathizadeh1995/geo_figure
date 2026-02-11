@@ -10,10 +10,14 @@ class SheetManagerMixin:
         if idx not in self._sheet_data:
             self._sheet_data[idx] = {
                 'curves': {}, 'ensembles': {}, 'vs_profiles': {},
+                'soil_profiles': {},
                 'selected_uid': None, 'velocity_unit': 'metric'
             }
-        elif 'vs_profiles' not in self._sheet_data[idx]:
-            self._sheet_data[idx]['vs_profiles'] = {}
+        else:
+            if 'vs_profiles' not in self._sheet_data[idx]:
+                self._sheet_data[idx]['vs_profiles'] = {}
+            if 'soil_profiles' not in self._sheet_data[idx]:
+                self._sheet_data[idx]['soil_profiles'] = {}
 
     @property
     def _curves(self) -> dict:
@@ -48,12 +52,16 @@ class SheetManagerMixin:
         canvas = self.sheet_tabs.get_current_canvas()
         subplot_info = canvas.get_subplot_info()
         self.curve_tree.set_subplot_structure(subplot_info)
+        self.curve_tree.set_subplot_types(canvas._subplot_types)
         for uid, curve in self._curves.items():
             self.curve_tree.add_curve(curve)
         for uid, ens in self._ensembles.items():
             self.curve_tree.add_ensemble(ens)
         for uid, prof in self._vs_profiles.items():
             self.curve_tree.add_vs_profile(prof)
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        for uid, sp in sd.get('soil_profiles', {}).items():
+            self.curve_tree.add_soil_profile(sp)
         self.properties.set_available_subplots(subplot_info)
 
     def _on_sheet_changed(self, index: int):
@@ -191,6 +199,14 @@ class SheetManagerMixin:
             self._vs_profiles[p.uid] = p
             self.curve_tree.add_vs_profile(p)
             new_canvas.add_vs_profile(p)
+
+        for uid, sp in src.get('soil_profiles', {}).items():
+            import copy as _copy
+            s = _copy.copy(sp)
+            s.uid = str(_uuid.uuid4())[:8]
+            self._sheet_data[new_idx]['soil_profiles'][s.uid] = s
+            self.curve_tree.add_soil_profile(s)
+            new_canvas.add_soil_profile(s)
 
         new_canvas.auto_range()
         self.log_panel.log_info(f"Duplicated sheet '{src_name}' -> '{new_name}'")

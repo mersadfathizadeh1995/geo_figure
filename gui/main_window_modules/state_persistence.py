@@ -93,6 +93,7 @@ class StatePersistenceMixin:
         curves = list(sd.get('curves', {}).values())
         ensembles = list(sd.get('ensembles', {}).values())
         vs_profiles = list(sd.get('vs_profiles', {}).values())
+        soil_profiles = list(sd.get('soil_profiles', {}).values())
         return FigureState(
             layout_mode=cfg["layout_mode"],
             grid_rows=cfg["grid_rows"],
@@ -105,6 +106,7 @@ class StatePersistenceMixin:
             curves=curves,
             ensembles=ensembles,
             vs_profiles=vs_profiles,
+            soil_profiles=soil_profiles,
             theme=theme,
             velocity_unit=vel_unit,
         )
@@ -131,6 +133,11 @@ class StatePersistenceMixin:
             curves=list(self._curves.values()),
             ensembles=list(self._ensembles.values()),
             vs_profiles=list(self._vs_profiles.values()),
+            soil_profiles=list(
+                self._sheet_data.get(self._current_sheet_idx, {}).get(
+                    'soil_profiles', {}
+                ).values()
+            ),
             theme=theme,
             velocity_unit=vel_unit,
         )
@@ -325,6 +332,10 @@ class StatePersistenceMixin:
         for prof in fig_state.vs_profiles:
             self._vs_profiles[prof.uid] = prof
             canvas.add_vs_profile(prof)
+
+        for sp in getattr(fig_state, 'soil_profiles', []) or []:
+            self._sheet_data[new_idx]['soil_profiles'][sp.uid] = sp
+            canvas.add_soil_profile(sp)
 
         # Apply canvas display config (legend, axis ranges)
         canvas.apply_canvas_config(canvas_config)

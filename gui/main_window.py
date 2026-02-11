@@ -138,6 +138,7 @@ class MainWindow(
         self.curve_tree.curve_selected.connect(self._on_curve_selected)
         self.curve_tree.curve_visibility_changed.connect(self._on_curve_visibility)
         self.curve_tree.add_curve_requested.connect(self._on_open_file)
+        self.curve_tree.add_vs_profile_requested.connect(self._on_load_vs_profile)
         self.curve_tree.load_target_requested.connect(self._on_load_target)
         self.curve_tree.remove_curve_requested.connect(self._on_remove_curve)
         self.curve_tree.point_visibility_changed.connect(self._on_point_visibility)
@@ -156,6 +157,13 @@ class MainWindow(
         self.curve_tree.vs_profile_subplot_changed.connect(
             self._on_vs_profile_subplot_changed
         )
+        self.curve_tree.soil_profile_selected.connect(self._on_soil_profile_selected)
+        self.curve_tree.soil_profile_visibility_changed.connect(
+            self._on_soil_profile_visibility
+        )
+        self.curve_tree.remove_soil_profile_requested.connect(
+            self._on_remove_soil_profile
+        )
 
         # Properties panel signals
         self.properties.curve_updated.connect(self._on_curve_updated)
@@ -164,6 +172,7 @@ class MainWindow(
         )
         self.properties.ensemble_updated.connect(self._on_ensemble_updated)
         self.properties.vs_profile_updated.connect(self._on_vs_profile_updated)
+        self.properties.soil_profile_updated.connect(self._on_soil_profile_updated)
 
         # Sheet panel signals
         self.sheet_panel.legend_changed.connect(self._on_legend_changed)
@@ -191,3 +200,14 @@ class MainWindow(
         self._curves[curve.uid] = curve
         self.curve_tree.add_curve(curve)
         canvas.add_curve(curve)
+
+    def _add_soil_profile(self, profile, canvas):
+        """Add a soil profile to the data store, tree, and canvas."""
+        from geo_figure.core.models import SoilProfile
+        if profile.subplot_key == "main" and "main" not in canvas._plots:
+            profile.subplot_key = canvas.active_subplot or list(canvas._plots.keys())[0]
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        sp_list = sd.setdefault("soil_profiles", {})
+        sp_list[profile.uid] = profile
+        self.curve_tree.add_soil_profile(profile)
+        canvas.add_soil_profile(profile)

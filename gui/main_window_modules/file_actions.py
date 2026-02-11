@@ -1,10 +1,57 @@
-"""File I/O actions: open curves, load target."""
+"""File I/O actions: open curves, load target, load Vs profiles."""
 from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QSpinBox, QDialogButtonBox, QGroupBox
 
 from geo_figure.core.models import CurveType, WaveType
 from geo_figure.io.curve_reader import detect_and_read, read_theoretical_dc_txt
+
+
+class _VsLoadOptionsDialog(QDialog):
+    """Pre-load dialog for Vs profile files with data mapper and group option."""
+
+    def __init__(self, filepaths, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Load Vs Profile Options")
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+
+        n = len(filepaths)
+        names = [Path(f).name for f in filepaths[:3]]
+        lbl = ", ".join(names) + (f" (+{n - 3} more)" if n > 3 else "")
+        layout.addWidget(QLabel(f"<b>Files:</b> {lbl}"))
+
+        grp = QGroupBox("Options")
+        g_layout = QVBoxLayout(grp)
+
+        self.mapper_check = QCheckBox("Use Data Mapper (manually assign columns)")
+        g_layout.addWidget(self.mapper_check)
+
+        self.group_check = QCheckBox("Group multiple profiles under one layer")
+        self.group_check.setChecked(True)
+        self.group_check.setToolTip(
+            "When a file contains multiple profiles, group them under a "
+            "collapsible parent node in the data tree"
+        )
+        g_layout.addWidget(self.group_check)
+
+        layout.addWidget(grp)
+
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    @property
+    def use_mapper(self) -> bool:
+        return self.mapper_check.isChecked()
+
+    @property
+    def group_multi(self) -> bool:
+        return self.group_check.isChecked()
 
 
 class _LoadOptionsDialog(QDialog):
@@ -191,6 +238,107 @@ class FileActionsMixin:
             canvas.auto_range()
         except Exception as e:
             self.log_panel.log_error(f"Failed to load target: {e}")
+
+    def _on_load_vs_profile(self):
+        """Load one or more Vs/Vp/density soil profile files."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Load Vs Profile Files",
+            "",
+            "All supported (*.txt *.csv);;Text files (*.txt);;CSV files (*.csv);;All files (*.*)"
+        )
+        if not files:
+            return
+
+        # Show Vs load options dialog
+        dlg = _VsLoadOptionsDialog(files, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        use_mapper = dlg.use_mapper
+        group_multi = dlg.group_multi
+
+        # Resolve mapping if data mapper requested
+        mapping = None
+        if use_mapper:
+            mapping = self._run_vs_data_mapper(files[0])
+            if mapping is None:
+                return
+
+        from geo_figure.io.vs_reader import detect_and_read_vs, read_vs_mapped
+        from geo_figure.core.models import CURVE_COLORS, SoilProfileGroup
+
+        canvas = self.sheet_tabs.get_current_canvas()
+        target_key = canvas.active_subplot or "main"
+
+        # Auto-convert DC subplot to vs_profile if no DC data on it
+        subplot_type = canvas._subplot_types.get(target_key, "dc")
+        if subplot_type != "vs_profile":
+            has_dc = any(
+                c.subplot_key == target_key for c in self._curves.values()
+            ) or any(
+                e.subplot_key == target_key for e in self._ensembles.values()
+            )
+            if not has_dc:
+                canvas.set_subplot_type(target_key, "vs_profile")
+                self._rebuild_tree()
+                target_key = canvas.active_subplot or target_key
+
+        color_idx = len(canvas._soil_profiles)
+        for filepath in files:
+            try:
+                if mapping:
+                    profiles = read_vs_mapped(filepath, mapping)
+                else:
+                    profiles = detect_and_read_vs(filepath)
+
+                for prof in profiles:
+                    prof.color = CURVE_COLORS[color_idx % len(CURVE_COLORS)]
+                    color_idx += 1
+                    prof.subplot_key = target_key
+
+                fname = Path(filepath).name
+                if len(profiles) > 1 and group_multi:
+                    # Group multiple profiles under a parent node
+                    group = SoilProfileGroup(
+                        name=Path(filepath).stem,
+                        profiles=profiles,
+                        subplot_key=profiles[0].subplot_key,
+                    )
+                    sd = self._sheet_data.get(self._current_sheet_idx, {})
+                    sp_dict = sd.setdefault("soil_profiles", {})
+                    for prof in profiles:
+                        sp_dict[prof.uid] = prof
+                    self.curve_tree.add_soil_profile_group(group)
+                    for prof in profiles:
+                        canvas.add_soil_profile(prof)
+                else:
+                    for prof in profiles:
+                        self._add_soil_profile(prof, canvas)
+
+                self.log_panel.log_success(
+                    f"Loaded {len(profiles)} profile(s) from {fname}"
+                )
+            except Exception as e:
+                self.log_panel.log_error(f"Failed to load Vs profile {filepath}: {e}")
+        canvas.auto_range()
+
+    def _run_vs_data_mapper(self, filepath):
+        """Open the DataMapper dialog for Vs profile files."""
+        try:
+            from geo_figure.io.data_mapper import DataMapperDialog, parse_file
+            from geo_figure.io.vs_reader import vs_profile_config
+            columns = parse_file(filepath)
+            if not columns:
+                self.log_panel.log_error(f"No data columns found in {filepath}")
+                return None
+            config = vs_profile_config()
+            dlg = DataMapperDialog(columns, config=config, parent=self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                return dlg.get_mapping()
+            return None
+        except Exception as e:
+            self.log_panel.log_error(f"Data mapper error: {e}")
+            return None
 
     def _on_export_csv(self):
         """Export current sheet data (curves + ensembles) as CSV files."""

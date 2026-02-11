@@ -6,13 +6,17 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal, Qt, QMimeData
 from PySide6.QtGui import QColor, QIcon, QPixmap, QPainter, QBrush, QDrag
 from typing import Dict, Optional, List, Tuple
-from geo_figure.core.models import CurveData, CurveType, EnsembleData, VsProfileData, CURVE_COLORS
+from geo_figure.core.models import (
+    CurveData, CurveType, EnsembleData, VsProfileData,
+    SoilProfile, SoilProfileGroup, CURVE_COLORS,
+)
 
 # Data keys stored in tree items
 _SUBPLOT_PREFIX = "__subplot__"
 _ENSEMBLE_PREFIX = "__ens__"
 _LAYER_PREFIX = "__layer__"
 _PROFILE_PREFIX = "__vsp__"
+_SOIL_PREFIX = "__sp__"
 _ROLE_UID = Qt.UserRole
 _ROLE_POINT_IDX = Qt.UserRole + 1
 
@@ -86,6 +90,7 @@ class CurveTreePanel(QWidget):
     curve_visibility_changed = Signal(str, bool)  # uid, visible
     point_visibility_changed = Signal(str, int, bool)  # uid, point_index, visible
     add_curve_requested = Signal()         # request file open
+    add_vs_profile_requested = Signal()    # request Vs profile file open
     load_target_requested = Signal()       # request .target load
     remove_curve_requested = Signal(str)   # uid
     curve_subplot_changed = Signal(str, str)   # uid, new_subplot_key
@@ -99,12 +104,17 @@ class CurveTreePanel(QWidget):
     vs_profile_layer_toggled = Signal(str, str, bool)  # prof_uid, layer, visible
     remove_vs_profile_requested = Signal(str)   # profile uid
     vs_profile_subplot_changed = Signal(str, str)  # prof_uid, new_subplot_key
+    soil_profile_selected = Signal(str)                # soil profile uid
+    soil_profile_visibility_changed = Signal(str, bool)  # uid, visible
+    remove_soil_profile_requested = Signal(str)        # uid
+    soil_profile_subplot_changed = Signal(str, str)    # uid, new_subplot_key
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._curves: Dict[str, QTreeWidgetItem] = {}  # uid -> tree item
         self._ensembles: Dict[str, QTreeWidgetItem] = {}  # ens uid -> tree item
         self._vs_profiles: Dict[str, QTreeWidgetItem] = {}  # profile uid -> tree item
+        self._soil_profiles: Dict[str, QTreeWidgetItem] = {}  # soil profile uid -> tree item
         self._subplot_roots: Dict[str, QTreeWidgetItem] = {}  # key -> root item
         self._color_index = 0
         self._setup_ui()
@@ -133,8 +143,8 @@ class CurveTreePanel(QWidget):
         btn_layout.setSpacing(4)
 
         self.add_btn = QPushButton("+ Add")
-        self.add_btn.setToolTip("Add dispersion curve file")
-        self.add_btn.clicked.connect(lambda: self.add_curve_requested.emit())
+        self.add_btn.setToolTip("Add data file (DC curve or Vs profile)")
+        self.add_btn.clicked.connect(self._on_add_clicked)
         btn_layout.addWidget(self.add_btn)
 
         self.target_btn = QPushButton("Load Target")
@@ -161,7 +171,21 @@ class CurveTreePanel(QWidget):
             root.setFlags(flags)
             self._subplot_roots[key] = root
         self._active_subplot_key = ""
+        self._subplot_types: Dict[str, str] = {}  # key -> "dc" or "vs_profile"
         self.tree.blockSignals(False)
+
+    def set_subplot_types(self, types: Dict[str, str]):
+        """Update the subplot type map so Add button routes correctly."""
+        self._subplot_types = dict(types)
+
+    def _on_add_clicked(self):
+        """Route the Add button to DC or Vs loader based on active subplot type."""
+        key = self._active_subplot_key
+        stype = self._subplot_types.get(key, "dc")
+        if stype == "vs_profile":
+            self.add_vs_profile_requested.emit()
+        else:
+            self.add_curve_requested.emit()
 
     def add_curve(self, curve: CurveData):
         """Add a curve under its subplot group, with per-point items."""
@@ -319,6 +343,74 @@ class CurveTreePanel(QWidget):
             del self._vs_profiles[uid]
             self._update_counts()
 
+    # ── Soil profiles (loaded from file) ──────────────────────
+
+    def add_soil_profile(self, profile: SoilProfile):
+        """Add a single soil profile item to the tree."""
+        parent = self._subplot_roots.get(profile.subplot_key)
+        if not parent and self._subplot_roots:
+            parent = list(self._subplot_roots.values())[0]
+        if not parent:
+            return
+
+        self.tree.blockSignals(True)
+        label = profile.custom_name or profile.name
+        item = QTreeWidgetItem(parent, [label])
+        item.setData(0, _ROLE_UID, f"{_SOIL_PREFIX}{profile.uid}")
+        flags = item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled
+        flags = flags & ~Qt.ItemIsDropEnabled
+        item.setFlags(flags)
+        item.setCheckState(0, Qt.Checked if profile.visible else Qt.Unchecked)
+        self._set_item_color(item, profile.color)
+        self.tree.blockSignals(False)
+        self._soil_profiles[profile.uid] = item
+        self._update_counts()
+
+    def add_soil_profile_group(self, group: SoilProfileGroup):
+        """Add a group of soil profiles as a collapsible parent with children."""
+        parent = self._subplot_roots.get(group.subplot_key)
+        if not parent and self._subplot_roots:
+            parent = list(self._subplot_roots.values())[0]
+        if not parent:
+            return
+
+        self.tree.blockSignals(True)
+        label = group.custom_name or group.name
+        root_item = QTreeWidgetItem(parent, [f"{label} ({len(group.profiles)} profiles)"])
+        root_item.setData(0, _ROLE_UID, f"{_SOIL_PREFIX}{group.uid}")
+        flags = root_item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled
+        flags = flags & ~Qt.ItemIsDropEnabled
+        root_item.setFlags(flags)
+        root_item.setCheckState(0, Qt.Checked)
+        if group.group_color:
+            self._set_item_color(root_item, group.group_color)
+
+        for prof in group.profiles:
+            child_label = prof.custom_name or prof.name
+            child = QTreeWidgetItem(root_item, [child_label])
+            child.setData(0, _ROLE_UID, f"{_SOIL_PREFIX}{prof.uid}")
+            child_flags = child.flags() | Qt.ItemIsUserCheckable
+            child_flags = child_flags & ~Qt.ItemIsDragEnabled & ~Qt.ItemIsDropEnabled
+            child.setFlags(child_flags)
+            child.setCheckState(0, Qt.Checked if prof.visible else Qt.Unchecked)
+            self._set_item_color(child, prof.color)
+            self._soil_profiles[prof.uid] = child
+
+        root_item.setExpanded(True)
+        self.tree.blockSignals(False)
+        self._soil_profiles[group.uid] = root_item
+        self._update_counts()
+
+    def remove_soil_profile(self, uid: str):
+        """Remove a soil profile (or group) from the tree."""
+        item = self._soil_profiles.get(uid)
+        if item:
+            parent = item.parent()
+            if parent:
+                parent.removeChild(item)
+            del self._soil_profiles[uid]
+            self._update_counts()
+
     def clear_all(self):
         """Remove all curves, ensembles, and profiles from the tree."""
         for uid in list(self._curves.keys()):
@@ -327,6 +419,8 @@ class CurveTreePanel(QWidget):
             self.remove_ensemble(uid)
         for uid in list(self._vs_profiles.keys()):
             self.remove_vs_profile(uid)
+        for uid in list(self._soil_profiles.keys()):
+            self.remove_soil_profile(uid)
 
     def select_curve(self, uid: str):
         """Programmatically select a curve in the tree."""
@@ -400,6 +494,9 @@ class CurveTreePanel(QWidget):
             if layer_data is not None and str(layer_data).startswith(_LAYER_PREFIX):
                 layer_name = str(layer_data).replace(_LAYER_PREFIX, "")
             self.vs_profile_selected.emit(prof_uid, layer_name)
+        elif uid_str.startswith(_SOIL_PREFIX):
+            sp_uid = uid_str.replace(_SOIL_PREFIX, "")
+            self.soil_profile_selected.emit(sp_uid)
         else:
             self.curve_selected.emit(uid_str)
 
@@ -464,6 +561,22 @@ class CurveTreePanel(QWidget):
                     self.vs_profile_layer_toggled.emit(prof_uid, layer_name, visible)
             return
 
+        # Soil Profile items
+        if uid_str.startswith(_SOIL_PREFIX):
+            sp_uid = uid_str.replace(_SOIL_PREFIX, "")
+            # Group root toggle — toggle all children
+            if item.childCount() > 0:
+                self.tree.blockSignals(True)
+                for i in range(item.childCount()):
+                    child = item.child(i)
+                    child.setCheckState(0, item.checkState(0))
+                    child_uid = str(child.data(0, _ROLE_UID)).replace(_SOIL_PREFIX, "")
+                    self.soil_profile_visibility_changed.emit(child_uid, visible)
+                self.tree.blockSignals(False)
+            else:
+                self.soil_profile_visibility_changed.emit(sp_uid, visible)
+            return
+
         # Regular curve items
         point_index = item.data(0, _ROLE_POINT_IDX)
         if point_index is not None:
@@ -523,6 +636,27 @@ class CurveTreePanel(QWidget):
                 remove_action.triggered.connect(
                     lambda: self.remove_vs_profile_requested.emit(prof_uid)
                 )
+            menu.exec(self.tree.viewport().mapToGlobal(pos))
+            return
+
+        # Soil Profile context menu
+        if str(uid).startswith(_SOIL_PREFIX):
+            sp_uid = str(uid).replace(_SOIL_PREFIX, "")
+            remove_action = menu.addAction("Remove Soil Profile")
+            remove_action.triggered.connect(
+                lambda: self.remove_soil_profile_requested.emit(sp_uid)
+            )
+            if len(self._subplot_roots) > 1:
+                move_menu = menu.addMenu("Move to")
+                for key, root in self._subplot_roots.items():
+                    name = root.text(0)
+                    paren_idx = name.rfind(" (")
+                    name = name[:paren_idx] if paren_idx > 0 else name
+                    act = move_menu.addAction(name)
+                    act.triggered.connect(
+                        lambda checked, u=sp_uid, k=key:
+                            self.soil_profile_subplot_changed.emit(u, k)
+                    )
             menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
 
@@ -591,5 +725,8 @@ class CurveTreePanel(QWidget):
         elif uid.startswith(_PROFILE_PREFIX):
             prof_uid = uid.replace(_PROFILE_PREFIX, "")
             self.vs_profile_subplot_changed.emit(prof_uid, new_key)
+        elif uid.startswith(_SOIL_PREFIX):
+            sp_uid = uid.replace(_SOIL_PREFIX, "")
+            self.soil_profile_subplot_changed.emit(sp_uid, new_key)
         else:
             self.curve_subplot_changed.emit(uid, new_key)

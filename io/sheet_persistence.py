@@ -292,13 +292,16 @@ def save_sheet(
     curves_dir = os.path.join(sheet_dir, "curves")
     ens_dir = os.path.join(sheet_dir, "ensembles")
     vs_dir = os.path.join(sheet_dir, "vs_profiles")
-    for d in (curves_dir, ens_dir, vs_dir):
+    sp_dir = os.path.join(sheet_dir, "soil_profiles")
+    for d in (curves_dir, ens_dir, vs_dir, sp_dir):
         os.makedirs(d, exist_ok=True)
 
     # Save data objects
     curve_metas = [_save_curve(c, curves_dir) for c in figure_state.curves]
     ens_metas = [_save_ensemble(e, ens_dir) for e in figure_state.ensembles]
     vs_metas = [_save_vs_profile(p, vs_dir) for p in figure_state.vs_profiles]
+    sp_metas = [_save_soil_profile(s, sp_dir)
+                for s in getattr(figure_state, 'soil_profiles', []) or []]
 
     # Build manifest
     manifest = {
@@ -321,6 +324,7 @@ def save_sheet(
         "curves": curve_metas,
         "ensembles": ens_metas,
         "vs_profiles": vs_metas,
+        "soil_profiles": sp_metas,
     }
     _write_json(os.path.join(sheet_dir, "manifest.json"), manifest)
 
@@ -454,6 +458,74 @@ def _load_vs_profile(meta: dict, vs_dir: str) -> VsProfileData:
     return p
 
 
+# ── Save: soil_profiles ──────────────────────────────────────
+
+def _save_soil_profile(sp, sp_dir: str) -> dict:
+    """Save a SoilProfile to disk and return metadata dict."""
+    meta = {
+        "uid": sp.uid,
+        "name": sp.name,
+        "custom_name": sp.custom_name,
+        "n_layers": sp.n_layers,
+        "visible": sp.visible,
+        "color": sp.color,
+        "line_width": sp.line_width,
+        "alpha": sp.alpha,
+        "show_uncertainty": sp.show_uncertainty,
+        "render_property": getattr(sp, "render_property", "vs"),
+        "subplot_key": sp.subplot_key,
+        "depth_max_display": sp.depth_max_display,
+        "halfspace_extension": sp.halfspace_extension,
+        "filepath": sp.filepath,
+        "model_id": sp.model_id,
+        "profile_index": sp.profile_index,
+    }
+    # Save numpy arrays
+    arrays = {}
+    for k in ("thickness", "top_depth", "bot_depth", "vs", "vp", "density",
+              "vs_low", "vs_high", "depth_low", "depth_high"):
+        arr = getattr(sp, k, None)
+        if arr is not None:
+            arrays[k] = arr
+    if arrays:
+        np.savez_compressed(os.path.join(sp_dir, f"{sp.uid}.npz"), **arrays)
+    return meta
+
+
+# ── Load: soil_profiles ──────────────────────────────────────
+
+def _load_soil_profile(meta: dict, sp_dir: str):
+    """Reconstruct a SoilProfile from saved metadata + files."""
+    from geo_figure.core.models import SoilProfile
+
+    sp = SoilProfile(
+        uid=meta.get("uid", ""),
+        name=meta.get("name", "Soil Profile"),
+        custom_name=meta.get("custom_name", ""),
+        n_layers=meta.get("n_layers", 0),
+        visible=meta.get("visible", True),
+        color=meta.get("color", "#2196F3"),
+        line_width=meta.get("line_width", 1.5),
+        alpha=meta.get("alpha", 255),
+        show_uncertainty=meta.get("show_uncertainty", True),
+        render_property=meta.get("render_property", "vs"),
+        subplot_key=meta.get("subplot_key", "main"),
+        depth_max_display=meta.get("depth_max_display", 0.0),
+        halfspace_extension=meta.get("halfspace_extension", 0.15),
+        filepath=meta.get("filepath"),
+        model_id=meta.get("model_id"),
+        profile_index=meta.get("profile_index", 0),
+    )
+    arr_path = os.path.join(sp_dir, f"{sp.uid}.npz")
+    if os.path.isfile(arr_path):
+        with np.load(arr_path) as data:
+            for key in ("thickness", "top_depth", "bot_depth", "vs", "vp", "density",
+                        "vs_low", "vs_high", "depth_low", "depth_high"):
+                if key in data:
+                    setattr(sp, key, data[key])
+    return sp
+
+
 # ── Top-level load ────────────────────────────────────────────
 
 def load_sheet(sheet_path: str) -> Tuple[str, FigureState, CanvasConfig]:
@@ -475,10 +547,17 @@ def load_sheet(sheet_path: str) -> Tuple[str, FigureState, CanvasConfig]:
     curves_dir = os.path.join(sheet_dir, "curves")
     ens_dir = os.path.join(sheet_dir, "ensembles")
     vs_dir = os.path.join(sheet_dir, "vs_profiles")
+    sp_dir = os.path.join(sheet_dir, "soil_profiles")
 
     curves = [_load_curve(m, curves_dir) for m in manifest.get("curves", [])]
     ensembles = [_load_ensemble(m, ens_dir) for m in manifest.get("ensembles", [])]
     vs_profiles = [_load_vs_profile(m, vs_dir) for m in manifest.get("vs_profiles", [])]
+    soil_profiles = []
+    for m in manifest.get("soil_profiles", []):
+        try:
+            soil_profiles.append(_load_soil_profile(m, sp_dir))
+        except Exception:
+            pass
 
     figure_state = FigureState(
         layout_mode=layout.get("layout_mode", "combined"),
@@ -492,6 +571,7 @@ def load_sheet(sheet_path: str) -> Tuple[str, FigureState, CanvasConfig]:
         curves=curves,
         ensembles=ensembles,
         vs_profiles=vs_profiles,
+        soil_profiles=soil_profiles,
         theme=display.get("theme", "light"),
         velocity_unit=display.get("velocity_unit", "metric"),
     )

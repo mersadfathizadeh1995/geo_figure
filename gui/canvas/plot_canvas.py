@@ -9,7 +9,7 @@ from PySide6.QtCore import Signal, Qt, QRectF
 from PySide6.QtGui import QColor, QImage, QPainter
 from typing import Dict, Optional, List
 
-from geo_figure.core.models import CurveData, EnsembleData, VsProfileData
+from geo_figure.core.models import CurveData, EnsembleData, VsProfileData, SoilProfile, SoilProfileGroup
 
 from .plot_canvas_modules.constants import (
     VEL_FACTORS, VEL_LABELS, VEL_UNIT_STR,
@@ -21,6 +21,7 @@ from .plot_canvas_modules import layout_builder
 from .plot_canvas_modules import curve_renderer
 from .plot_canvas_modules import ensemble_renderer
 from .plot_canvas_modules import vs_profile_renderer
+from .plot_canvas_modules import soil_profile_renderer
 from .plot_canvas_modules import legend_manager
 from .plot_canvas_modules import canvas_export
 
@@ -39,6 +40,7 @@ class PlotCanvas(QWidget):
         self._curves: Dict[str, dict] = {}
         self._ensembles: Dict[str, dict] = {}
         self._vs_profiles: Dict[str, dict] = {}
+        self._soil_profiles: Dict[str, dict] = {}
         self._layout_mode = LAYOUT_COMBINED
         self._grid_rows = 1
         self._grid_cols = 1
@@ -92,9 +94,11 @@ class PlotCanvas(QWidget):
         saved_curves = {uid: info["data"] for uid, info in self._curves.items()}
         saved_ensembles = {eid: info["data"] for eid, info in self._ensembles.items()}
         saved_profiles = {uid: info["data"] for uid, info in self._vs_profiles.items()}
+        saved_soil = {uid: info["data"] for uid, info in self._soil_profiles.items()}
         self._curves.clear()
         self._ensembles.clear()
         self._vs_profiles.clear()
+        self._soil_profiles.clear()
         self._build_layout()
         for uid, curve in saved_curves.items():
             self.add_curve(curve)
@@ -102,6 +106,8 @@ class PlotCanvas(QWidget):
             self.add_ensemble(ens)
         for uid, prof in saved_profiles.items():
             self.add_vs_profile(prof)
+        for uid, sp in saved_soil.items():
+            self.add_soil_profile(sp)
         self._apply_legend_mode()
         self.auto_range()
 
@@ -259,6 +265,27 @@ class PlotCanvas(QWidget):
     def clear_vs_profiles(self):
         for uid in list(self._vs_profiles.keys()):
             self.remove_vs_profile(uid)
+
+    # ── Soil profile (loaded file) delegates ──────────────────
+
+    def add_soil_profile(self, profile: SoilProfile):
+        soil_profile_renderer.add_soil_profile(self, profile)
+
+    def add_soil_profile_group(self, group: SoilProfileGroup):
+        soil_profile_renderer.add_soil_profile_group(self, group)
+
+    def remove_soil_profile(self, uid: str):
+        soil_profile_renderer.remove_soil_profile(self, uid)
+
+    def set_soil_profile_visible(self, uid: str, visible: bool):
+        soil_profile_renderer.set_soil_profile_visible(self, uid, visible)
+
+    def _rebuild_soil_profile(self, uid: str):
+        soil_profile_renderer._rebuild_soil_profile(self, uid)
+
+    def clear_soil_profiles(self):
+        for uid in list(self._soil_profiles.keys()):
+            self.remove_soil_profile(uid)
 
     # ── Legend management (delegates to legend_manager) ────────
 

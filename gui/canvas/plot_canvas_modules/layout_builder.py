@@ -52,16 +52,28 @@ def build_layout(canvas):
 
 def _build_combined(canvas):
     name = canvas._subplot_names.get("main", "")
-    p = canvas.graphics_layout.addPlot(
-        row=0, col=0,
-        axisItems={"bottom": LogFreqAxis(orientation="bottom")},
-    )
-    if name:
-        p.setTitle(name)
-    canvas._plots["main"] = p
-    canvas._subplot_names.setdefault("main", "")
-    canvas._subplot_types["main"] = "dc"
-    configure_dc_plot(canvas, p, "main")
+    cell_type = canvas._subplot_types.get("main", "dc")
+
+    if cell_type == "vs_profile":
+        # Build as Vs profile subplot (linear axes, inverted Y)
+        p = canvas.graphics_layout.addPlot(row=0, col=0)
+        if name:
+            p.setTitle(name)
+        canvas._plots["main"] = p
+        canvas._subplot_names.setdefault("main", "")
+        canvas._subplot_types["main"] = "vs_profile"
+        configure_vs_plot(canvas, p, "main")
+    else:
+        p = canvas.graphics_layout.addPlot(
+            row=0, col=0,
+            axisItems={"bottom": LogFreqAxis(orientation="bottom")},
+        )
+        if name:
+            p.setTitle(name)
+        canvas._plots["main"] = p
+        canvas._subplot_names.setdefault("main", "")
+        canvas._subplot_types["main"] = "dc"
+        configure_dc_plot(canvas, p, "main")
 
 
 def _build_split_wave(canvas):

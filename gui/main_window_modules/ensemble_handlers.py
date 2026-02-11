@@ -587,3 +587,44 @@ class EnsembleHandlersMixin:
         self._vs_profiles[uid] = prof
         canvas = self.sheet_tabs.get_current_canvas()
         canvas._rebuild_vs_profile(uid)
+
+    # ── Soil Profile handlers ────────────────────────────────────
+
+    def _on_soil_profile_selected(self, uid: str):
+        """Handle soil profile selection from tree."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        sp_dict = sd.get("soil_profiles", {})
+        profile = sp_dict.get(uid)
+        if profile:
+            self.properties.show_soil_profile(uid, profile)
+            self.status_bar.showMessage(
+                f"Selected: {profile.display_name} | {profile.n_layers} layers"
+            )
+
+    def _on_soil_profile_visibility(self, uid: str, visible: bool):
+        """Toggle visibility of a soil profile."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        sp_dict = sd.get("soil_profiles", {})
+        profile = sp_dict.get(uid)
+        if profile:
+            profile.visible = visible
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.set_soil_profile_visible(uid, visible)
+
+    def _on_remove_soil_profile(self, uid: str):
+        """Remove a soil profile from data and canvas."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        sp_dict = sd.get("soil_profiles", {})
+        sp_dict.pop(uid, None)
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.remove_soil_profile(uid)
+        self.curve_tree.remove_soil_profile(uid)
+        self.log_panel.log_info("Removed soil profile")
+
+    def _on_soil_profile_updated(self, uid: str, profile):
+        """Handle soil profile display settings change from properties panel."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        sp_dict = sd.get("soil_profiles", {})
+        sp_dict[uid] = profile
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas._rebuild_soil_profile(uid)

@@ -314,6 +314,164 @@ class VsProfileData:
         return None
 
 
+# ---------------------------------------------------------------------------
+# Soil profile: a single layered earth model (loaded from file)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SoilProfile:
+    """A single layered velocity/density model loaded from a file.
+
+    Unlike VsProfileData (which holds ensemble statistics from thousands of
+    profiles), SoilProfile represents one deterministic layered model.
+    """
+    uid: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    name: str = "Soil Profile"
+    custom_name: str = ""
+
+    # Layer data — arrays of length n_layers
+    n_layers: int = 0
+    thickness: Optional[np.ndarray] = None   # m (last=0 for halfspace)
+    top_depth: Optional[np.ndarray] = None   # m
+    bot_depth: Optional[np.ndarray] = None   # m (last=inf for halfspace)
+    vs: Optional[np.ndarray] = None          # m/s
+    vp: Optional[np.ndarray] = None          # m/s
+    density: Optional[np.ndarray] = None     # kg/m3
+
+    # Uncertainty bounds (per-layer, optional)
+    vs_low: Optional[np.ndarray] = None
+    vs_high: Optional[np.ndarray] = None
+    depth_low: Optional[np.ndarray] = None
+    depth_high: Optional[np.ndarray] = None
+
+    # Display
+    visible: bool = True
+    color: str = "#2196F3"
+    line_width: float = 1.5
+    alpha: int = 255
+    show_uncertainty: bool = True
+    render_property: str = "vs"  # "vs", "vp", "density"
+
+    # Rendering
+    subplot_key: str = "main"
+    depth_max_display: float = 0.0        # 0 = auto
+    halfspace_extension: float = 0.15     # fraction of max depth
+
+    # Source
+    filepath: Optional[str] = None
+    model_id: Optional[str] = None
+    profile_index: int = 0
+
+    @property
+    def display_name(self) -> str:
+        return self.custom_name if self.custom_name else self.name
+
+    @property
+    def has_data(self) -> bool:
+        return self.top_depth is not None and self.n_layers > 0
+
+    @property
+    def active_values(self) -> Optional[np.ndarray]:
+        """Return the property array selected by render_property."""
+        return {"vs": self.vs, "vp": self.vp, "density": self.density}.get(
+            self.render_property, self.vs
+        )
+
+    @property
+    def max_depth(self) -> float:
+        """Max finite depth in the profile."""
+        if self.bot_depth is None:
+            return 0.0
+        finite = self.bot_depth[np.isfinite(self.bot_depth)]
+        return float(np.max(finite)) if len(finite) > 0 else 0.0
+
+    def to_step_arrays(self, unit_factor: float = 1.0):
+        """Convert layer data to paired arrays for step-function plotting.
+
+        Returns (depth_arr, value_arr, hs_depth, hs_value) where hs_* are
+        the halfspace extension segment (or None).
+        """
+        vals = self.active_values
+        if vals is None or self.top_depth is None:
+            return np.array([]), np.array([]), None, None
+
+        dmax = self.depth_max_display if self.depth_max_display > 0 else self.max_depth
+        if dmax <= 0:
+            dmax = 100.0
+        ext = dmax * self.halfspace_extension
+
+        depth_pairs = []
+        val_pairs = []
+        hs_depth = None
+        hs_val = None
+
+        for i in range(self.n_layers):
+            td = self.top_depth[i] * unit_factor
+            bd = self.bot_depth[i]
+            v = vals[i] * unit_factor if self.render_property != "density" else vals[i]
+
+            if not np.isfinite(bd) or bd == 0 and i == self.n_layers - 1:
+                # Halfspace — draw to dmax, then dashed extension
+                bd_disp = dmax * unit_factor
+                depth_pairs.extend([td, bd_disp])
+                val_pairs.extend([v, v])
+                hs_depth = np.array([bd_disp, bd_disp + ext * unit_factor])
+                hs_val = np.array([v, v])
+            else:
+                bd_disp = bd * unit_factor
+                depth_pairs.extend([td, bd_disp])
+                val_pairs.extend([v, v])
+
+        return (np.array(depth_pairs), np.array(val_pairs), hs_depth, hs_val)
+
+    @classmethod
+    def from_thickness(cls, thickness, vs=None, vp=None, density=None, **kw):
+        """Create a SoilProfile from thickness array (computing depths)."""
+        thickness = np.asarray(thickness, dtype=float)
+        n = len(thickness)
+        top = np.zeros(n)
+        bot = np.zeros(n)
+        cum = 0.0
+        for i in range(n):
+            top[i] = cum
+            if thickness[i] <= 0 and i == n - 1:
+                bot[i] = np.inf  # halfspace
+            else:
+                cum += thickness[i]
+                bot[i] = cum
+        return cls(
+            n_layers=n, thickness=thickness,
+            top_depth=top, bot_depth=bot,
+            vs=np.asarray(vs, dtype=float) if vs is not None else None,
+            vp=np.asarray(vp, dtype=float) if vp is not None else None,
+            density=np.asarray(density, dtype=float) if density is not None else None,
+            **kw,
+        )
+
+
+@dataclass
+class SoilProfileGroup:
+    """A collection of SoilProfiles displayed together."""
+    uid: str = field(default_factory=lambda: str(uuid.uuid4())[:8])
+    name: str = "Profile Group"
+    custom_name: str = ""
+    profiles: List[SoilProfile] = field(default_factory=list)
+    subplot_key: str = "main"
+    depth_max_display: float = 0.0
+    group_color: Optional[str] = None   # overrides individual colors if set
+    group_alpha: int = 80
+    group_line_width: float = 0.5
+    filepath: Optional[str] = None
+
+    @property
+    def display_name(self) -> str:
+        return self.custom_name if self.custom_name else self.name
+
+    @property
+    def has_data(self) -> bool:
+        return len(self.profiles) > 0 and any(p.has_data for p in self.profiles)
+
+
 @dataclass
 class FigureState:
     """Complete renderable state of a figure — the single source of truth
@@ -333,6 +491,8 @@ class FigureState:
     curves: List[CurveData] = field(default_factory=list)
     ensembles: List[EnsembleData] = field(default_factory=list)
     vs_profiles: List["VsProfileData"] = field(default_factory=list)
+    soil_profiles: List["SoilProfile"] = field(default_factory=list)
+    soil_profile_groups: List["SoilProfileGroup"] = field(default_factory=list)
 
     # Display
     theme: str = "light"

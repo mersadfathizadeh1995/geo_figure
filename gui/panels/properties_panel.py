@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QScrollArea
 from PySide6.QtCore import Signal, Qt
 from typing import Optional
 
-from geo_figure.core.models import CurveData, EnsembleData, VsProfileData
+from geo_figure.core.models import CurveData, EnsembleData, VsProfileData, SoilProfile
 from geo_figure.gui.panels.properties_modules import (
     CollapsibleSection,
     CurveInfoMixin,
@@ -36,6 +36,7 @@ class PropertiesPanel(
         self._current_curve: Optional[CurveData] = None
         self._current_ensemble: Optional[EnsembleData] = None
         self._current_profile: Optional[VsProfileData] = None
+        self._current_soil_profile: Optional[SoilProfile] = None
         self._updating = False
         self._setup_ui()
 
@@ -74,6 +75,7 @@ class PropertiesPanel(
         self._build_ensemble_info(layout)
         self._build_ensemble_styles(layout)
         self._build_vs_profile_info(layout)
+        self._build_soil_profile_info(layout)
 
         layout.addStretch()
         scroll.setWidget(container)
@@ -88,6 +90,7 @@ class PropertiesPanel(
         self._current_curve = curve
         self._current_ensemble = None
         self._current_profile = None
+        self._current_soil_profile = None
 
         self.empty_label.setVisible(False)
         self.info_group.setVisible(True)
@@ -96,6 +99,8 @@ class PropertiesPanel(
         self.ens_group.setVisible(False)
         self.ens_style_group.setVisible(False)
         self.vs_prof_group.setVisible(False)
+        self.sp_info_group.setVisible(False)
+        self.sp_style_group.setVisible(False)
 
         self._populate_curve_info(curve)
         self._populate_style(curve)
@@ -110,6 +115,7 @@ class PropertiesPanel(
         self._current_curve = None
         self._current_ensemble = ens
         self._current_profile = None
+        self._current_soil_profile = None
 
         self.empty_label.setVisible(False)
         self.info_group.setVisible(False)
@@ -118,6 +124,8 @@ class PropertiesPanel(
         self.ens_group.setVisible(True)
         self.ens_style_group.setVisible(True)
         self.vs_prof_group.setVisible(False)
+        self.sp_info_group.setVisible(False)
+        self.sp_style_group.setVisible(False)
 
         self._populate_ensemble(ens)
 
@@ -130,6 +138,7 @@ class PropertiesPanel(
         self._current_curve = None
         self._current_ensemble = None
         self._current_profile = prof
+        self._current_soil_profile = None
 
         self.empty_label.setVisible(False)
         self.info_group.setVisible(False)
@@ -139,9 +148,35 @@ class PropertiesPanel(
         self.ens_style_group.setVisible(False)
         self.vs_prof_group.setVisible(True)
         self.vs_disp_group.setVisible(True)
+        self.sp_info_group.setVisible(False)
+        self.sp_style_group.setVisible(False)
 
         self._populate_vs_profile(prof, layer_name)
 
+        self._updating = False
+
+    def show_soil_profile(self, uid: str, profile: SoilProfile):
+        """Display properties for a loaded soil profile."""
+        self._updating = True
+        self._current_uid = uid
+        self._current_curve = None
+        self._current_ensemble = None
+        self._current_profile = None
+        self._current_soil_profile = profile
+
+        self.empty_label.setVisible(False)
+        self.info_group.setVisible(False)
+        self.style_group.setVisible(False)
+        self.proc_group.setVisible(False)
+        self.ens_group.setVisible(False)
+        self.ens_style_group.setVisible(False)
+        self.vs_prof_group.setVisible(False)
+        self.vs_disp_group.setVisible(False)
+        self.vs_layer_group.setVisible(False)
+        self.sp_info_group.setVisible(True)
+        self.sp_style_group.setVisible(True)
+
+        self._populate_soil_profile(profile)
         self._updating = False
 
     def clear(self):
@@ -150,6 +185,7 @@ class PropertiesPanel(
         self._current_curve = None
         self._current_ensemble = None
         self._current_profile = None
+        self._current_soil_profile = None
         self.empty_label.setVisible(True)
         self.info_group.setVisible(False)
         self.style_group.setVisible(False)
@@ -159,6 +195,8 @@ class PropertiesPanel(
         self.vs_prof_group.setVisible(False)
         self.vs_disp_group.setVisible(False)
         self.vs_layer_group.setVisible(False)
+        self.sp_info_group.setVisible(False)
+        self.sp_style_group.setVisible(False)
 
     # ── Emit helpers ─────────────────────────────────────────────
 
@@ -169,6 +207,7 @@ class PropertiesPanel(
     # ── Vs Profile section ───────────────────────────────────────
 
     vs_profile_updated = Signal(str, object)  # uid, VsProfileData
+    soil_profile_updated = Signal(str, object)  # uid, SoilProfile
 
     def _build_vs_profile_info(self, parent_layout):
         """Build the Vs profile info + display settings + layer style sections."""
@@ -374,3 +413,172 @@ class PropertiesPanel(
         layer.line_width = self.vs_layer_width_spin.value()
         layer.alpha = round(self.vs_layer_alpha_spin.value() * 255 / 100)
         self.vs_profile_updated.emit(self._current_uid, prof)
+
+    # ── Soil Profile section (loaded from file) ──────────────────
+
+    def _build_soil_profile_info(self, parent_layout):
+        """Build the soil profile info + display style sections."""
+        from PySide6.QtWidgets import (
+            QDoubleSpinBox, QSpinBox, QPushButton, QHBoxLayout, QComboBox,
+            QLineEdit,
+        )
+
+        # Info section
+        self.sp_info_group, content, form = self._make_section(
+            "Soil Profile Info", expanded=True,
+        )
+        self.sp_info_group.setVisible(False)
+
+        self.sp_name_edit = QLineEdit()
+        self.sp_name_edit.editingFinished.connect(self._on_sp_name_changed)
+        form.addRow("Name:", self.sp_name_edit)
+        self.sp_layers_label = QLabel("-")
+        form.addRow("Layers:", self.sp_layers_label)
+        self.sp_depth_label = QLabel("-")
+        form.addRow("Depth range:", self.sp_depth_label)
+        self.sp_vs_range_label = QLabel("-")
+        form.addRow("Value range:", self.sp_vs_range_label)
+        self.sp_has_vp_label = QLabel("-")
+        form.addRow("Has Vp:", self.sp_has_vp_label)
+        self.sp_has_rho_label = QLabel("-")
+        form.addRow("Has Density:", self.sp_has_rho_label)
+        self.sp_model_id_label = QLabel("-")
+        form.addRow("Model ID:", self.sp_model_id_label)
+
+        # Render-as combo (Vs / Vp / Density)
+        self.sp_render_combo = QComboBox()
+        self.sp_render_combo.addItems(["Vs", "Vp", "Density"])
+        self.sp_render_combo.currentTextChanged.connect(self._on_sp_render_changed)
+        form.addRow("Render as:", self.sp_render_combo)
+
+        parent_layout.addWidget(self.sp_info_group)
+
+        # Style section
+        self.sp_style_group, style_content, style_form = self._make_section(
+            "Profile Style", expanded=True,
+        )
+        self.sp_style_group.setVisible(False)
+
+        color_row = QHBoxLayout()
+        self.sp_color_btn = QPushButton()
+        self.sp_color_btn.setFixedSize(28, 28)
+        self.sp_color_btn.clicked.connect(self._pick_sp_color)
+        color_row.addWidget(self.sp_color_btn)
+        self.sp_color_hex = QLabel("#2196F3")
+        color_row.addWidget(self.sp_color_hex)
+        color_row.addStretch()
+        style_form.addRow("Color:", color_row)
+
+        self.sp_width_spin = QDoubleSpinBox()
+        self.sp_width_spin.setRange(0.5, 10.0)
+        self.sp_width_spin.setValue(1.5)
+        self.sp_width_spin.setSingleStep(0.5)
+        self.sp_width_spin.valueChanged.connect(self._on_sp_style_changed)
+        style_form.addRow("Width:", self.sp_width_spin)
+
+        self.sp_alpha_spin = QSpinBox()
+        self.sp_alpha_spin.setRange(0, 100)
+        self.sp_alpha_spin.setValue(100)
+        self.sp_alpha_spin.setSuffix("%")
+        self.sp_alpha_spin.valueChanged.connect(self._on_sp_style_changed)
+        style_form.addRow("Opacity:", self.sp_alpha_spin)
+
+        parent_layout.addWidget(self.sp_style_group)
+
+    def _populate_soil_profile(self, profile: SoilProfile):
+        """Fill soil profile info and style fields."""
+        import numpy as np
+
+        self.sp_name_edit.setText(profile.custom_name or profile.name)
+        self.sp_layers_label.setText(str(profile.n_layers))
+        self.sp_depth_label.setText(f"0 - {profile.max_depth:.1f} m")
+
+        vals = profile.active_values
+        if vals is not None and len(vals) > 0:
+            finite = vals[np.isfinite(vals)]
+            if len(finite) > 0:
+                self.sp_vs_range_label.setText(f"{np.min(finite):.1f} - {np.max(finite):.1f} m/s")
+            else:
+                self.sp_vs_range_label.setText("N/A")
+        else:
+            self.sp_vs_range_label.setText("N/A")
+
+        self.sp_has_vp_label.setText("Yes" if profile.vp is not None else "No")
+        self.sp_has_rho_label.setText("Yes" if profile.density is not None else "No")
+        self.sp_model_id_label.setText(profile.model_id or "-")
+
+        # Render-as combo
+        self._updating = True
+        available = []
+        if profile.vs is not None:
+            available.append("Vs")
+        if profile.vp is not None:
+            available.append("Vp")
+        if profile.density is not None:
+            available.append("Density")
+        self.sp_render_combo.clear()
+        self.sp_render_combo.addItems(available if available else ["Vs"])
+        # Select current render mode
+        render_map = {"vs": "Vs", "vp": "Vp", "density": "Density"}
+        current_text = render_map.get(
+            getattr(profile, "render_property", "vs"), "Vs",
+        )
+        idx = self.sp_render_combo.findText(current_text)
+        if idx >= 0:
+            self.sp_render_combo.setCurrentIndex(idx)
+
+        # Style
+        self._update_sp_color_btn(profile.color)
+        self.sp_width_spin.setValue(profile.line_width)
+        self.sp_alpha_spin.setValue(round(profile.alpha * 100 / 255))
+        self._updating = False
+
+    def _update_sp_color_btn(self, color_str: str):
+        from PySide6.QtGui import QColor, QPixmap
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(QColor(color_str))
+        self.sp_color_btn.setIcon(pixmap)
+        self.sp_color_btn.setStyleSheet(
+            f"background-color: {color_str}; border: 1px solid #555555;"
+        )
+        self.sp_color_hex.setText(color_str)
+
+    def _pick_sp_color(self):
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        if not self._current_soil_profile:
+            return
+        color = QColorDialog.getColor(
+            QColor(self._current_soil_profile.color), self, "Pick Profile Color",
+        )
+        if color.isValid():
+            self._current_soil_profile.color = color.name()
+            self._update_sp_color_btn(color.name())
+            self.soil_profile_updated.emit(
+                self._current_uid, self._current_soil_profile,
+            )
+
+    def _on_sp_style_changed(self):
+        if self._updating or not self._current_soil_profile:
+            return
+        prof = self._current_soil_profile
+        prof.line_width = self.sp_width_spin.value()
+        prof.alpha = round(self.sp_alpha_spin.value() * 255 / 100)
+        self.soil_profile_updated.emit(self._current_uid, prof)
+
+    def _on_sp_name_changed(self):
+        if self._updating or not self._current_soil_profile:
+            return
+        self._current_soil_profile.custom_name = self.sp_name_edit.text()
+        self.soil_profile_updated.emit(
+            self._current_uid, self._current_soil_profile,
+        )
+
+    def _on_sp_render_changed(self, text):
+        if self._updating or not self._current_soil_profile:
+            return
+        render_map = {"Vs": "vs", "Vp": "vp", "Density": "density"}
+        self._current_soil_profile.render_property = render_map.get(text, "vs")
+        self.soil_profile_updated.emit(
+            self._current_uid, self._current_soil_profile,
+        )
