@@ -79,6 +79,20 @@ class CurveData:
                 self.freq_max = float(np.max(self.frequency))
             if self.point_mask is None:
                 self.point_mask = np.ones(self.n_points, dtype=bool)
+        # Auto-normalize: ensure velocity and slowness are always populated
+        if self.velocity is None and self.slowness is not None:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                self.velocity = np.where(self.slowness != 0,
+                                         1.0 / self.slowness, 0.0)
+        if self.slowness is None and self.velocity is not None:
+            with np.errstate(divide='ignore', invalid='ignore'):
+                self.slowness = np.where(self.velocity != 0,
+                                         1.0 / self.velocity, 0.0)
+        # Clip extreme logstd values
+        if (self.stddev is not None and self.stddev_type == "logstd"
+                and len(self.stddev) > 0):
+            self.stddev = np.clip(self.stddev, 0.0, 5.0)
+            self.stddev = np.where(np.isfinite(self.stddev), self.stddev, 0.0)
 
     @property
     def has_data(self) -> bool:

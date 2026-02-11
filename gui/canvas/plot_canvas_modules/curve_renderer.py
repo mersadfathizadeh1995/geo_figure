@@ -21,7 +21,7 @@ def get_plot_for_curve(canvas, curve: CurveData) -> pg.PlotItem:
 
 def add_curve(canvas, curve: CurveData):
     """Add or update a curve on the canvas."""
-    if not curve.has_data:
+    if not curve.has_data or curve.velocity is None:
         return
 
     if curve.uid in canvas._curves:

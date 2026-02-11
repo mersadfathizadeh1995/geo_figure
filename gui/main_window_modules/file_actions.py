@@ -1,10 +1,76 @@
 """File I/O actions: open curves, load target."""
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QSpinBox, QDialogButtonBox, QGroupBox
 
-from geo_figure.core.models import CurveType
+from geo_figure.core.models import CurveType, WaveType
 from geo_figure.io.curve_reader import detect_and_read, read_theoretical_dc_txt
+
+
+class _LoadOptionsDialog(QDialog):
+    """Pre-load dialog with data mapper toggle, wave type, and mode."""
+
+    def __init__(self, filepaths, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Load Options")
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+
+        # File summary
+        n = len(filepaths)
+        names = [Path(f).name for f in filepaths[:3]]
+        lbl = ", ".join(names) + (f" (+{n - 3} more)" if n > 3 else "")
+        layout.addWidget(QLabel(f"<b>Files:</b> {lbl}"))
+
+        # Options group
+        grp = QGroupBox("Options")
+        g_layout = QVBoxLayout(grp)
+
+        # Wave type
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("Wave type:"))
+        self.wave_combo = QComboBox()
+        self.wave_combo.addItems(["Rayleigh", "Love"])
+        row1.addWidget(self.wave_combo)
+        row1.addStretch()
+        g_layout.addLayout(row1)
+
+        # Mode
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Mode number:"))
+        self.mode_spin = QSpinBox()
+        self.mode_spin.setRange(0, 20)
+        self.mode_spin.setValue(0)
+        row2.addWidget(self.mode_spin)
+        row2.addStretch()
+        g_layout.addLayout(row2)
+
+        # Data mapper toggle
+        self.mapper_check = QCheckBox("Use Data Mapper (manually assign columns)")
+        g_layout.addWidget(self.mapper_check)
+        layout.addWidget(grp)
+
+        # Buttons
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        layout.addWidget(btn_box)
+
+    @property
+    def wave_type(self) -> WaveType:
+        return (WaveType.LOVE if self.wave_combo.currentText() == "Love"
+                else WaveType.RAYLEIGH)
+
+    @property
+    def mode(self) -> int:
+        return self.mode_spin.value()
+
+    @property
+    def use_mapper(self) -> bool:
+        return self.mapper_check.isChecked()
 
 
 class FileActionsMixin:
@@ -21,10 +87,29 @@ class FileActionsMixin:
         if not files:
             return
 
+        # Show load options dialog
+        dlg = _LoadOptionsDialog(files, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        wave_type = dlg.wave_type
+        mode_num = dlg.mode
+        use_mapper = dlg.use_mapper
+
+        # Resolve mapping if data mapper requested
+        mapping = None
+        if use_mapper:
+            mapping = self._run_data_mapper(files[0])
+            if mapping is None:
+                return  # user cancelled the mapper
+
         canvas = self.sheet_tabs.get_current_canvas()
         for filepath in files:
             try:
-                curves = detect_and_read(filepath)
+                curves = detect_and_read(
+                    filepath, mapping=mapping,
+                    wave_type=wave_type, mode=mode_num,
+                )
                 for curve in curves:
                     if curve.curve_type != CurveType.THEORETICAL:
                         curve.color = self.curve_tree.get_next_color()
@@ -36,6 +121,27 @@ class FileActionsMixin:
                 )
             except Exception as e:
                 self.log_panel.log_error(f"Failed to load {filepath}: {e}")
+
+        canvas.auto_range()
+
+    def _run_data_mapper(self, filepath):
+        """Open the DataMapper dialog for the given file. Returns ColumnMapping or None."""
+        try:
+            from geo_figure.io.data_mapper import (
+                DataMapperDialog, dispersion_config, parse_file,
+            )
+            columns = parse_file(filepath)
+            if not columns:
+                self.log_panel.log_error(f"No data columns found in {filepath}")
+                return None
+            config = dispersion_config()
+            dlg = DataMapperDialog(columns, config=config, parent=self)
+            if dlg.exec() == QDialog.DialogCode.Accepted:
+                return dlg.get_mapping()
+            return None
+        except Exception as e:
+            self.log_panel.log_error(f"Data mapper error: {e}")
+            return None
 
         canvas.auto_range()
 

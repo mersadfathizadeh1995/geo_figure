@@ -90,6 +90,8 @@ def _render_curve(ax, curve: CurveData, vf: float):
     """Render a single CurveData on a matplotlib axis."""
     freq = curve.frequency
     vel = curve.velocity
+    if freq is None or vel is None:
+        return
     mask = (curve.point_mask if curve.point_mask is not None
             else np.ones(len(freq), dtype=bool))
     f = freq[mask]
