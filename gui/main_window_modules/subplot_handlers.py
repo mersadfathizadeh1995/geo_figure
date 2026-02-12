@@ -30,6 +30,7 @@ class SubplotHandlersMixin:
         """Set the active subplot when user clicks a subplot root in the tree."""
         canvas = self.sheet_tabs.get_current_canvas()
         canvas._active_subplot = key
+        self.curve_tree._active_subplot_key = key
         name = canvas._subplot_names.get(key, key)
         self.status_bar.showMessage(f"Active subplot: {name}")
 
@@ -74,6 +75,71 @@ class SubplotHandlersMixin:
             f"Moved '{prof.display_name}' to subplot '{new_key}'"
         )
 
+    def _on_soil_profile_subplot_changed(self, uid: str, new_key: str):
+        """Move a soil profile (or group) to a different subplot."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        canvas = self.sheet_tabs.get_current_canvas()
+
+        # Check if uid is a group
+        groups = sd.get("soil_profile_groups", {})
+        group = groups.get(uid)
+        if group is not None:
+            if group.subplot_key == new_key:
+                return
+            group.subplot_key = new_key
+            self.curve_tree.tree.blockSignals(True)
+            for prof in group.profiles:
+                prof.subplot_key = new_key
+                canvas.remove_soil_profile(prof.uid)
+                canvas.add_soil_profile(prof)
+            self.curve_tree.remove_soil_profile(uid)
+            self.curve_tree.add_soil_profile_group(group)
+            self.curve_tree.tree.blockSignals(False)
+            canvas.auto_range()
+            self.log_panel.log_info(
+                f"Moved group '{group.display_name}' to subplot '{new_key}'"
+            )
+            return
+
+        # Individual profile
+        sp_dict = sd.get("soil_profiles", {})
+        profile = sp_dict.get(uid)
+        if not profile:
+            return
+        if profile.subplot_key == new_key:
+            return
+
+        # Remove from old group if it was in one
+        old_group = None
+        for grp in groups.values():
+            for i, prof in enumerate(grp.profiles):
+                if prof.uid == uid:
+                    old_group = grp
+                    grp.profiles.pop(i)
+                    break
+            if old_group:
+                break
+
+        profile.subplot_key = new_key
+        canvas.remove_soil_profile(uid)
+        canvas.add_soil_profile(profile)
+        canvas.auto_range()
+
+        self.curve_tree.tree.blockSignals(True)
+        if old_group:
+            self.curve_tree.remove_soil_profile(old_group.uid)
+            if old_group.profiles:
+                self.curve_tree.add_soil_profile_group(old_group)
+            else:
+                groups.pop(old_group.uid, None)
+        else:
+            self.curve_tree.remove_soil_profile(uid)
+        self.curve_tree.add_soil_profile(profile)
+        self.curve_tree.tree.blockSignals(False)
+        self.log_panel.log_info(
+            f"Moved '{profile.display_name}' to subplot '{new_key}'"
+        )
+
     def _on_subplot_renamed(self, key: str, new_name: str):
         """Rename a subplot on the canvas and refresh tree."""
         canvas = self.sheet_tabs.get_current_canvas()
@@ -101,6 +167,12 @@ class SubplotHandlersMixin:
         for uid, ens in self._ensembles.items():
             if ens.subplot_key not in valid_keys:
                 ens.subplot_key = first_key
+
+        # Migrate soil profiles
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        for uid, sp in sd.get('soil_profiles', {}).items():
+            if sp.subplot_key not in valid_keys:
+                sp.subplot_key = first_key
 
         self._rebuild_tree()
 

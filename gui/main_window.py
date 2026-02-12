@@ -164,6 +164,9 @@ class MainWindow(
         self.curve_tree.remove_soil_profile_requested.connect(
             self._on_remove_soil_profile
         )
+        self.curve_tree.soil_profile_subplot_changed.connect(
+            self._on_soil_profile_subplot_changed
+        )
 
         # Properties panel signals
         self.properties.curve_updated.connect(self._on_curve_updated)
@@ -173,6 +176,7 @@ class MainWindow(
         self.properties.ensemble_updated.connect(self._on_ensemble_updated)
         self.properties.vs_profile_updated.connect(self._on_vs_profile_updated)
         self.properties.soil_profile_updated.connect(self._on_soil_profile_updated)
+        self.properties.group_stats_requested.connect(self._on_group_stats_requested)
 
         # Sheet panel signals
         self.sheet_panel.legend_changed.connect(self._on_legend_changed)

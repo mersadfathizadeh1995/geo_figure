@@ -1,7 +1,12 @@
 """File I/O actions: open curves, load target, load Vs profiles."""
 from pathlib import Path
 
-from PySide6.QtWidgets import QFileDialog, QDialog, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox, QLabel, QSpinBox, QDialogButtonBox, QGroupBox
+from PySide6.QtWidgets import (
+    QFileDialog, QDialog, QVBoxLayout, QHBoxLayout, QCheckBox, QComboBox,
+    QLabel, QSpinBox, QDialogButtonBox, QGroupBox,
+    QMessageBox, QGridLayout,
+)
+from PySide6.QtCore import Qt
 
 from geo_figure.core.models import CurveType, WaveType
 from geo_figure.io.curve_reader import detect_and_read, read_theoretical_dc_txt
@@ -23,6 +28,15 @@ class _VsLoadOptionsDialog(QDialog):
 
         grp = QGroupBox("Options")
         g_layout = QVBoxLayout(grp)
+
+        # Unit selection
+        unit_row = QHBoxLayout()
+        unit_row.addWidget(QLabel("Units:"))
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["m  (metric)", "ft  (imperial)"])
+        unit_row.addWidget(self.unit_combo)
+        unit_row.addStretch()
+        g_layout.addLayout(unit_row)
 
         self.mapper_check = QCheckBox("Use Data Mapper (manually assign columns)")
         g_layout.addWidget(self.mapper_check)
@@ -52,6 +66,127 @@ class _VsLoadOptionsDialog(QDialog):
     @property
     def group_multi(self) -> bool:
         return self.group_check.isChecked()
+
+    @property
+    def units(self) -> str:
+        """Return 'm' or 'ft'."""
+        return "ft" if self.unit_combo.currentIndex() == 1 else "m"
+
+
+class _VsPropertyDialog(QDialog):
+    """Choose which properties to draw and where to place them.
+
+    Shown only when a loaded file contains Vp and/or density in addition to Vs.
+    """
+
+    def __init__(self, has_vp: bool, has_density: bool,
+                 subplot_info=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Property Selection")
+        self.setMinimumWidth(440)
+        self.setModal(True)
+        main_layout = QVBoxLayout(self)
+
+        available = ["Vs"]
+        if has_vp:
+            available.append("Vp")
+        if has_density:
+            available.append("Density")
+
+        main_layout.addWidget(QLabel(
+            f"<b>Available properties:</b> {', '.join(available)}"
+        ))
+
+        # -- Mode combo instead of radio buttons --
+        mode_row = QHBoxLayout()
+        mode_row.addWidget(QLabel("Display mode:"))
+        self._mode_combo = QComboBox()
+        self._mode_combo.addItem("Single property", "single")
+        self._mode_combo.addItem("Side by side (sections)", "multi")
+        self._mode_combo.addItem("Assign to subplots", "split")
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_row.addWidget(self._mode_combo, 1)
+        main_layout.addLayout(mode_row)
+
+        # -- Property table: checkbox + subplot combo per property --
+        self._prop_group = QGroupBox("Properties")
+        prop_grid = QGridLayout(self._prop_group)
+        prop_grid.addWidget(QLabel("<b>Draw</b>"), 0, 0)
+        prop_grid.addWidget(QLabel("<b>Property</b>"), 0, 1)
+        self._subplot_header = QLabel("<b>Target subplot</b>")
+        prop_grid.addWidget(self._subplot_header, 0, 2)
+
+        # Build subplot list for dropdowns
+        self._subplot_info = subplot_info or [("main", "Main")]
+        sp_names = [name for _, name in self._subplot_info]
+
+        self._prop_checks = {}
+        self._prop_combos = {}
+        for row_i, prop in enumerate(available, start=1):
+            cb = QCheckBox()
+            cb.setChecked(True)
+            self._prop_checks[prop.lower()] = cb
+            prop_grid.addWidget(cb, row_i, 0, Qt.AlignmentFlag.AlignCenter)
+
+            prop_grid.addWidget(QLabel(prop), row_i, 1)
+
+            combo = QComboBox()
+            for sp_key, sp_name in self._subplot_info:
+                combo.addItem(sp_name, sp_key)
+            self._prop_combos[prop.lower()] = combo
+            prop_grid.addWidget(combo, row_i, 2)
+
+        prop_grid.setColumnStretch(2, 1)
+        main_layout.addWidget(self._prop_group)
+
+        # -- Button box --
+        btn_box = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        btn_box.accepted.connect(self.accept)
+        btn_box.rejected.connect(self.reject)
+        main_layout.addWidget(btn_box)
+
+        # Set initial UI state
+        self._on_mode_changed()
+
+    def _on_mode_changed(self):
+        """Show/hide subplot combos based on mode."""
+        mode = self.mode
+        show_combos = (mode == "split")
+        self._subplot_header.setVisible(show_combos)
+        for combo in self._prop_combos.values():
+            combo.setVisible(show_combos)
+        if mode == "single":
+            # Keep only the first checked, uncheck the rest
+            first_found = False
+            for cb in self._prop_checks.values():
+                if not first_found:
+                    cb.setChecked(True)
+                    first_found = True
+                else:
+                    cb.setChecked(False)
+        else:
+            for cb in self._prop_checks.values():
+                cb.setChecked(True)
+
+    @property
+    def mode(self) -> str:
+        return self._mode_combo.currentData()
+
+    @property
+    def selected_properties(self) -> list:
+        return [k for k, cb in self._prop_checks.items() if cb.isChecked()]
+
+    @property
+    def property_targets(self) -> dict:
+        """Return {prop_name: subplot_key} for split mode."""
+        result = {}
+        for prop, combo in self._prop_combos.items():
+            if self._prop_checks.get(prop, None) and self._prop_checks[prop].isChecked():
+                result[prop] = combo.currentData()
+        return result
 
 
 class _LoadOptionsDialog(QDialog):
@@ -95,6 +230,16 @@ class _LoadOptionsDialog(QDialog):
         # Data mapper toggle
         self.mapper_check = QCheckBox("Use Data Mapper (manually assign columns)")
         g_layout.addWidget(self.mapper_check)
+
+        # Unit selection
+        row_u = QHBoxLayout()
+        row_u.addWidget(QLabel("Units:"))
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["m  (metric)", "ft  (imperial)"])
+        row_u.addWidget(self.unit_combo)
+        row_u.addStretch()
+        g_layout.addLayout(row_u)
+
         layout.addWidget(grp)
 
         # Buttons
@@ -119,6 +264,11 @@ class _LoadOptionsDialog(QDialog):
     def use_mapper(self) -> bool:
         return self.mapper_check.isChecked()
 
+    @property
+    def units(self) -> str:
+        """Return 'm' or 'ft'."""
+        return "ft" if self.unit_combo.currentIndex() == 1 else "m"
+
 
 class FileActionsMixin:
     """File loading actions."""
@@ -142,6 +292,7 @@ class FileActionsMixin:
         wave_type = dlg.wave_type
         mode_num = dlg.mode
         use_mapper = dlg.use_mapper
+        units = dlg.units
 
         # Resolve mapping if data mapper requested
         mapping = None
@@ -149,6 +300,8 @@ class FileActionsMixin:
             mapping = self._run_data_mapper(files[0])
             if mapping is None:
                 return  # user cancelled the mapper
+
+        from geo_figure.io.converters import convert_dc_curve_ft_to_m
 
         canvas = self.sheet_tabs.get_current_canvas()
         for filepath in files:
@@ -158,6 +311,8 @@ class FileActionsMixin:
                     wave_type=wave_type, mode=mode_num,
                 )
                 for curve in curves:
+                    if units == "ft":
+                        convert_dc_curve_ft_to_m(curve)
                     if curve.curve_type != CurveType.THEORETICAL:
                         curve.color = self.curve_tree.get_next_color()
                     self._add_curve(curve, canvas)
@@ -256,6 +411,7 @@ class FileActionsMixin:
 
         use_mapper = dlg.use_mapper
         group_multi = dlg.group_multi
+        units = dlg.units
 
         # Resolve mapping if data mapper requested
         mapping = None
@@ -265,7 +421,59 @@ class FileActionsMixin:
                 return
 
         from geo_figure.io.vs_reader import detect_and_read_vs, read_vs_mapped
+        from geo_figure.io.converters import convert_soil_profile_ft_to_m
         from geo_figure.core.models import CURVE_COLORS, SoilProfileGroup
+        import copy
+
+        # Read all profiles first to detect available properties
+        all_file_profiles = []
+        for filepath in files:
+            try:
+                if mapping:
+                    profiles = read_vs_mapped(filepath, mapping)
+                else:
+                    profiles = detect_and_read_vs(filepath)
+                # Convert from imperial to metric if needed
+                if units == "ft":
+                    for prof in profiles:
+                        convert_soil_profile_ft_to_m(prof)
+                all_file_profiles.append((filepath, profiles))
+            except Exception as e:
+                self.log_panel.log_error(
+                    f"Failed to load Vs profile {filepath}: {e}"
+                )
+
+        if not all_file_profiles:
+            return
+
+        # Detect multi-property availability
+        has_vp = any(
+            p.vp is not None
+            for _, profs in all_file_profiles for p in profs
+        )
+        has_density = any(
+            p.density is not None
+            for _, profs in all_file_profiles for p in profs
+        )
+
+        prop_mode = "single"
+        selected_props = ["vs"]
+        user_targets = {}
+
+        if has_vp or has_density:
+            canvas_temp = self.sheet_tabs.get_current_canvas()
+            subplot_info = canvas_temp.get_subplot_info()
+            prop_dlg = _VsPropertyDialog(
+                has_vp, has_density,
+                subplot_info=subplot_info, parent=self,
+            )
+            if prop_dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            prop_mode = prop_dlg.mode
+            selected_props = prop_dlg.selected_properties
+            if not selected_props:
+                return
+            user_targets = prop_dlg.property_targets  # split mode assignments
 
         canvas = self.sheet_tabs.get_current_canvas()
         target_key = canvas.active_subplot or "main"
@@ -283,44 +491,102 @@ class FileActionsMixin:
                 self._rebuild_tree()
                 target_key = canvas.active_subplot or target_key
 
-        color_idx = len(canvas._soil_profiles)
-        for filepath in files:
-            try:
-                if mapping:
-                    profiles = read_vs_mapped(filepath, mapping)
-                else:
-                    profiles = detect_and_read_vs(filepath)
+        # Handle split mode: use user-chosen subplot targets
+        prop_labels = {"vs": "Vs", "vp": "Vp", "density": "Density"}
+        prop_targets = {}
+        if prop_mode == "split" and len(selected_props) > 1:
+            prop_targets = user_targets
+            # Ensure target subplots are vs_profile type and labelled
+            for prop, key in prop_targets.items():
+                canvas.set_subplot_type(key, "vs_profile")
+                canvas.rename_subplot(key, prop_labels.get(prop, prop))
+        else:
+            for prop in selected_props:
+                prop_targets[prop] = target_key
 
+        color_idx = len(canvas._soil_profiles)
+        for filepath, profiles in all_file_profiles:
+            fname = Path(filepath).name
+
+            if prop_mode == "single":
+                prop = selected_props[0]
                 for prof in profiles:
+                    prof.render_property = prop
                     prof.color = CURVE_COLORS[color_idx % len(CURVE_COLORS)]
                     color_idx += 1
                     prof.subplot_key = target_key
-
-                fname = Path(filepath).name
-                if len(profiles) > 1 and group_multi:
-                    # Group multiple profiles under a parent node
-                    group = SoilProfileGroup(
-                        name=Path(filepath).stem,
-                        profiles=profiles,
-                        subplot_key=profiles[0].subplot_key,
-                    )
-                    sd = self._sheet_data.get(self._current_sheet_idx, {})
-                    sp_dict = sd.setdefault("soil_profiles", {})
-                    for prof in profiles:
-                        sp_dict[prof.uid] = prof
-                    self.curve_tree.add_soil_profile_group(group)
-                    for prof in profiles:
-                        canvas.add_soil_profile(prof)
-                else:
-                    for prof in profiles:
-                        self._add_soil_profile(prof, canvas)
-
-                self.log_panel.log_success(
-                    f"Loaded {len(profiles)} profile(s) from {fname}"
+                self._add_profiles_to_canvas(
+                    profiles, canvas, group_multi, filepath
                 )
-            except Exception as e:
-                self.log_panel.log_error(f"Failed to load Vs profile {filepath}: {e}")
+
+            elif prop_mode == "multi":
+                # Register multi-property sections on the canvas
+                if target_key not in canvas._soil_profile_sections:
+                    canvas.set_soil_profile_sections(target_key, selected_props)
+                all_clones = []
+                for prop in selected_props:
+                    for prof in profiles:
+                        clone = copy.copy(prof)
+                        clone.uid = f"{prof.uid}_{prop}"
+                        clone.render_property = prop
+                        clone.color = CURVE_COLORS[color_idx % len(CURVE_COLORS)]
+                        color_idx += 1
+                        clone.subplot_key = target_key
+                        clone.custom_name = (
+                            f"{prof.custom_name or prof.name} "
+                            f"({prop_labels.get(prop, prop)})"
+                        )
+                        all_clones.append(clone)
+                self._add_profiles_to_canvas(
+                    all_clones, canvas, group_multi, filepath
+                )
+
+            elif prop_mode == "split":
+                for prop in selected_props:
+                    prop_key = prop_targets[prop]
+                    clones = []
+                    for prof in profiles:
+                        clone = copy.copy(prof)
+                        clone.uid = f"{prof.uid}_{prop}"
+                        clone.render_property = prop
+                        clone.color = CURVE_COLORS[color_idx % len(CURVE_COLORS)]
+                        color_idx += 1
+                        clone.subplot_key = prop_key
+                        clones.append(clone)
+                    self._add_profiles_to_canvas(
+                        clones, canvas, group_multi, filepath
+                    )
+
+            self.log_panel.log_success(
+                f"Loaded {len(profiles)} profile(s) from {fname}"
+            )
+
         canvas.auto_range()
+
+    def _add_profiles_to_canvas(self, profiles, canvas, group_multi, filepath):
+        """Add profiles to canvas, optionally grouping them."""
+        from geo_figure.core.models import SoilProfileGroup
+
+        if len(profiles) > 1 and group_multi:
+            group = SoilProfileGroup(
+                name=Path(filepath).stem,
+                profiles=profiles,
+                subplot_key=profiles[0].subplot_key,
+                filepath=filepath,
+            )
+            sd = self._sheet_data.get(self._current_sheet_idx, {})
+            sp_dict = sd.setdefault("soil_profiles", {})
+            for prof in profiles:
+                sp_dict[prof.uid] = prof
+            # Store group reference
+            grp_dict = sd.setdefault("soil_profile_groups", {})
+            grp_dict[group.uid] = group
+            self.curve_tree.add_soil_profile_group(group)
+            for prof in profiles:
+                canvas.add_soil_profile(prof)
+        else:
+            for prof in profiles:
+                self._add_soil_profile(prof, canvas)
 
     def _run_vs_data_mapper(self, filepath):
         """Open the DataMapper dialog for Vs profile files."""

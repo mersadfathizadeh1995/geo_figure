@@ -158,11 +158,24 @@ class MplRenderer:
         def _legend_fn(ax, key):
             configure_legend(ax, key, s)
 
+        sections = getattr(st, 'soil_profile_sections', {}) or {}
+
         for key, ax in axes_map.items():
             if key.endswith("_sigma") or key == "sigma_ln":
                 continue  # handled by vs_profile rendering
 
+            # Check if this is a multi-property section axis
+            if "_sp_" in key:
+                self._render_section_subplot(ax, key, sections, _legend_fn)
+                continue
+
             cell_type = st.subplot_types.get(key, "dc")
+
+            # Skip parent keys that have multi-property sections
+            if cell_type == "vs_profile" and key in sections and \
+                    len(sections[key]) > 1:
+                continue
+
             if cell_type == "vs_profile" or key == "vs_profile":
                 sig_ax = axes_map.get(
                     f"{key}_sigma", axes_map.get("sigma_ln")
@@ -178,3 +191,65 @@ class MplRenderer:
             if title:
                 ax.set_title(title, fontsize=s.typography.title_size,
                              fontweight=s.typography.font_weight)
+
+    def _render_section_subplot(self, ax, sec_key, sections, legend_fn):
+        """Render a single sub-section of a multi-property soil profile."""
+        from .renderer_modules.vs_renderer import (
+            _render_one_soil_profile, _render_group_stats,
+        )
+
+        st = self._state
+        s = self._settings
+        vf = self._vf
+
+        # Parse parent key and property from sec_key (e.g. "main_sp_vs")
+        parts = sec_key.rsplit("_sp_", 1)
+        if len(parts) != 2:
+            return
+        parent_key, prop = parts
+
+        vel_unit = "m/s" if st.velocity_unit != "imperial" else "ft/s"
+        _LABELS = {"vs": f"Vs ({vel_unit})", "vp": f"Vp ({vel_unit})",
+                    "density": "Density (kg/m3)"}
+        depth_unit = "ft" if st.velocity_unit == "imperial" else "m"
+
+        parent_sections = sections.get(parent_key, [])
+        is_first = (parent_sections and parent_sections[0] == prop)
+
+        # Render soil profiles matching this subplot + property
+        soil_profs = getattr(st, "soil_profiles", []) or []
+        for sp in soil_profs:
+            if (sp.subplot_key == parent_key or sp.subplot_key == "main") \
+                    and getattr(sp, "render_property", "vs") == prop:
+                _render_one_soil_profile(ax, sp, vf)
+
+        # Render group statistics
+        soil_groups = getattr(st, "soil_profile_groups", []) or []
+        for grp in soil_groups:
+            if (grp.subplot_key == parent_key or grp.subplot_key == "main") \
+                    and grp.has_statistics \
+                    and getattr(grp, "stats_property", "vs") == prop:
+                _render_group_stats(ax, grp, vf)
+
+        # Configure axes
+        acfg = s.axis_for(sec_key)
+        ax.set_xlabel(acfg.x_label or _LABELS.get(prop, f"Vs ({vel_unit})"),
+                       fontsize=s.typography.axis_label_size,
+                       fontweight=s.typography.font_weight)
+        # Only invert Y on the first section (shared Y propagates)
+        if is_first:
+            ax.invert_yaxis()
+
+        # Y-axis label only on leftmost section
+        if is_first:
+            ax.set_ylabel(f"Depth ({depth_unit})",
+                          fontsize=s.typography.axis_label_size,
+                          fontweight=s.typography.font_weight)
+        else:
+            ax.tick_params(axis="y", labelleft=False)
+
+        tick_weight = "bold" if s.typography.bold_ticks else "normal"
+        from .renderer_modules.axis_helpers import configure_ticks, configure_grid
+        configure_ticks(ax, acfg, tick_weight)
+        configure_grid(ax, acfg)
+        legend_fn(ax, sec_key)

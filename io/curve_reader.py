@@ -144,7 +144,8 @@ def _detect_stddev(arr: np.ndarray, ncols: int, slowness: np.ndarray,
         col5 = arr[:, 4]
         unique5 = set(col5[np.isfinite(col5)].tolist())
         if unique5 <= {0.0, 1.0} and len(unique5) == 2:
-            point_mask &= dummy_to_mask(col5, mode="0=on")
+            # 5th column is a weight: 1 = on, 0 = off
+            point_mask &= weight_to_mask(col5)
 
     return stddev, point_mask
 

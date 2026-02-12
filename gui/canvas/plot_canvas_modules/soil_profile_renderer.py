@@ -18,7 +18,16 @@ def add_soil_profile(canvas, profile: SoilProfile):
     convert = 3.28084 if canvas._velocity_unit == "imperial" else 1.0
 
     target_key = profile.subplot_key or canvas.active_subplot or "main"
-    plot = canvas._plots.get(target_key)
+
+    # Route to sub-section if multi-property sections exist
+    prop = getattr(profile, "render_property", "vs")
+    sections = canvas._soil_profile_sections.get(target_key)
+    if sections and len(sections) > 1 and prop in sections:
+        section_key = f"{target_key}_sp_{prop}"
+        plot = canvas._plots.get(section_key)
+    else:
+        plot = canvas._plots.get(target_key)
+
     if not plot:
         plot = list(canvas._plots.values())[0] if canvas._plots else None
     if plot is None:
@@ -48,6 +57,16 @@ def add_soil_profile(canvas, profile: SoilProfile):
         plot.invertY(True)
     # Ensure X axis is linear (not log-scale from DC subplot)
     plot.setLogMode(x=False, y=False)
+
+    # Update X-axis label (only when not in multi-section mode)
+    if not (sections and len(sections) > 1):
+        vel_unit = "ft/s" if canvas._velocity_unit == "imperial" else "m/s"
+        prop_labels = {
+            "vs": f"Vs ({vel_unit})",
+            "vp": f"Vp ({vel_unit})",
+            "density": "Density (kg/m3)",
+        }
+        plot.setLabel("bottom", prop_labels.get(prop, f"Vs ({vel_unit})"))
 
     # Main step curve (to_step_arrays already applied convert)
     c = pg.mkColor(profile.color)
@@ -129,13 +148,17 @@ def _add_uncertainty_fill(plot, items, profile, low, high, depth_arr, convert):
 # ---------------------------------------------------------------------------
 
 def add_soil_profile_group(canvas, group: SoilProfileGroup):
-    """Render all profiles in a group."""
+    """Render all profiles in a group, plus statistics if computed."""
     for prof in group.profiles:
         if group.group_color:
             prof.color = group.group_color
             prof.alpha = group.group_alpha
             prof.line_width = group.group_line_width
         add_soil_profile(canvas, prof)
+
+    # Render group statistics overlay
+    if group.has_statistics:
+        _add_group_stats(canvas, group)
 
 
 def remove_soil_profile_group(canvas, group: SoilProfileGroup):
@@ -180,3 +203,81 @@ def _rebuild_soil_profile(canvas, uid: str):
     prof = entry["data"]
     remove_soil_profile(canvas, uid)
     add_soil_profile(canvas, prof)
+
+
+# ---------------------------------------------------------------------------
+# Group statistics overlay
+# ---------------------------------------------------------------------------
+
+def _add_group_stats(canvas, group: SoilProfileGroup):
+    """Render median line and percentile band for a group."""
+    convert = 3.28084 if canvas._velocity_unit == "imperial" else 1.0
+    target_key = group.subplot_key or "main"
+
+    # Route to sub-section if multi-property sections exist
+    stats_prop = getattr(group, "stats_property", "vs")
+    sections = canvas._soil_profile_sections.get(target_key)
+    if sections and len(sections) > 1 and stats_prop in sections:
+        section_key = f"{target_key}_sp_{stats_prop}"
+        plot = canvas._plots.get(section_key)
+    else:
+        plot = canvas._plots.get(target_key)
+
+    if not plot:
+        plot = list(canvas._plots.values())[0] if canvas._plots else None
+    if plot is None:
+        return
+
+    depth = group.depth_grid * convert
+    stats_key = f"_grpstats_{group.uid}"
+    items = canvas._soil_profiles.get(stats_key, {
+        "plot": plot, "data": group, "item_list": [],
+    })
+    item_list = items["item_list"]
+
+    # Percentile band (fill between p05 and p95)
+    if group.show_percentile and group.p05_values is not None:
+        p05 = group.p05_values * convert
+        p95 = group.p95_values * convert
+
+        lo_item = pg.PlotDataItem(p05, depth)
+        hi_item = pg.PlotDataItem(p95, depth)
+        c = pg.mkColor(group.percentile_color)
+        c.setAlpha(group.percentile_alpha)
+        fill = pg.FillBetweenItem(lo_item, hi_item, brush=pg.mkBrush(c))
+        plot.addItem(lo_item)
+        plot.addItem(hi_item)
+        plot.addItem(fill)
+        lo_item.setVisible(False)
+        hi_item.setVisible(False)
+        item_list.extend([lo_item, hi_item, fill])
+
+    # Median line
+    if group.show_median and group.median_values is not None:
+        median = group.median_values * convert
+        c = pg.mkColor(group.median_color)
+        pen = pg.mkPen(color=c, width=group.median_line_width)
+        med_line = pg.PlotDataItem(
+            median, depth, pen=pen,
+            name=f"{group.display_name} Median",
+        )
+        plot.addItem(med_line)
+        item_list.append(med_line)
+
+    canvas._soil_profiles[stats_key] = items
+
+
+def rebuild_group_stats(canvas, group: SoilProfileGroup):
+    """Remove and re-render group statistics overlay."""
+    stats_key = f"_grpstats_{group.uid}"
+    entry = canvas._soil_profiles.pop(stats_key, None)
+    if entry:
+        plot = entry.get("plot")
+        for item in entry.get("item_list", []):
+            if plot:
+                try:
+                    plot.removeItem(item)
+                except Exception:
+                    pass
+    if group.has_statistics:
+        _add_group_stats(canvas, group)

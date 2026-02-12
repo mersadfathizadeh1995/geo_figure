@@ -46,9 +46,35 @@ def render_vs_subplot(
         if sp.subplot_key == subplot_key or sp.subplot_key == "main":
             _render_one_soil_profile(ax_vs, sp, vf)
 
+    # Render group statistics overlays
+    soil_groups = getattr(state, "soil_profile_groups", []) or []
+    for grp in soil_groups:
+        if (grp.subplot_key == subplot_key or grp.subplot_key == "main") \
+                and grp.has_statistics:
+            _render_group_stats(ax_vs, grp, vf)
+
     # Configure Vs axis
     acfg = settings.axis_for(subplot_key)
-    vs_label = acfg.x_label or VS_LABELS.get(state.velocity_unit, "Vs (m/s)")
+
+    # Determine X-axis label from rendered property type
+    default_vs_label = VS_LABELS.get(state.velocity_unit, "Vs (m/s)")
+    if not acfg.x_label:
+        # Auto-detect from soil profiles on this subplot
+        soil_profs = getattr(state, "soil_profiles", []) or []
+        sp_props = set()
+        for sp in soil_profs:
+            if (sp.subplot_key == subplot_key or sp.subplot_key == "main") \
+                    and sp.visible:
+                sp_props.add(getattr(sp, "render_property", "vs"))
+        if sp_props == {"vp"}:
+            vu = VEL_UNIT.get(state.velocity_unit, "m/s")
+            default_vs_label = f"Vp ({vu})"
+        elif sp_props == {"density"}:
+            default_vs_label = "Density (kg/m3)"
+        elif len(sp_props) > 1:
+            default_vs_label = f"Velocity ({VEL_UNIT.get(state.velocity_unit, 'm/s')})"
+
+    vs_label = acfg.x_label or default_vs_label
     depth_label = (acfg.y_label
                    or DEPTH_LABELS.get(state.velocity_unit, "Depth (m)"))
     ax_vs.set_xlabel(vs_label, fontsize=settings.typography.axis_label_size,
@@ -285,4 +311,32 @@ def _render_one_soil_profile(ax, sp, vf: float):
         ax.fill_betweenx(
             d_step, low_step, high_step,
             color=color, alpha=alpha_frac * 0.2, zorder=1,
+        )
+
+
+def _render_group_stats(ax, group, vf: float):
+    """Render median line and percentile band for a SoilProfileGroup."""
+    depth = group.depth_grid * vf
+
+    # Percentile band
+    if group.show_percentile and group.p05_values is not None:
+        p05 = group.p05_values * vf
+        p95 = group.p95_values * vf
+        alpha_frac = group.percentile_alpha / 255.0
+        ax.fill_betweenx(
+            depth, p05, p95,
+            color=group.percentile_color,
+            alpha=alpha_frac,
+            zorder=4,
+        )
+
+    # Median line
+    if group.show_median and group.median_values is not None:
+        median = group.median_values * vf
+        ax.plot(
+            median, depth,
+            color=group.median_color,
+            linewidth=group.median_line_width,
+            label=f"{group.display_name} Median",
+            zorder=5,
         )

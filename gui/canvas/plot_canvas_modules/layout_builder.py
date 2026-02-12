@@ -53,8 +53,19 @@ def build_layout(canvas):
 def _build_combined(canvas):
     name = canvas._subplot_names.get("main", "")
     cell_type = canvas._subplot_types.get("main", "dc")
+    sections = canvas._soil_profile_sections.get("main")
 
-    if cell_type == "vs_profile":
+    if cell_type == "vs_profile" and sections and len(sections) > 1:
+        # Multi-property sub-sections
+        sub = canvas.graphics_layout.addLayout(row=0, col=0)
+        sub.setContentsMargins(0, 0, 0, 0)
+        sub.layout.setSpacing(0)
+        sub.setMinimumSize(0, 0)
+        sub.setPreferredSize(0, 0)
+        canvas._subplot_names.setdefault("main", "")
+        canvas._subplot_types["main"] = "vs_profile"
+        _build_section_cell(canvas, sub, "main", sections, name, None)
+    elif cell_type == "vs_profile":
         # Build as Vs profile subplot (linear axes, inverted Y)
         p = canvas.graphics_layout.addPlot(row=0, col=0)
         if name:
@@ -130,34 +141,58 @@ def _build_grid(canvas):
             canvas._subplot_types.setdefault(key, "dc")
 
             if cell_type == "vs_profile":
-                # Nest Vs + sigma inside a sub-layout within one grid cell
-                sub = canvas.graphics_layout.addLayout(row=r, col=c)
-                # Remove all internal padding so it matches a direct PlotItem
-                sub.setContentsMargins(0, 0, 0, 0)
-                sub.layout.setSpacing(0)
-                # Prevent the sub-layout from inflating the column's size hints
-                sub.setMinimumSize(0, 0)
-                sub.setPreferredSize(0, 0)
-                total = vs_r + sig_r
-                sub.layout.setColumnStretchFactor(
-                    0, round((vs_r / total) * 100))
-                sub.layout.setColumnStretchFactor(
-                    1, round((sig_r / total) * 100))
+                sections = canvas._soil_profile_sections.get(key)
+                if sections and len(sections) > 1:
+                    # Multi-property sub-sections
+                    sub = canvas.graphics_layout.addLayout(row=r, col=c)
+                    sub.setContentsMargins(0, 0, 0, 0)
+                    sub.layout.setSpacing(0)
+                    sub.setMinimumSize(0, 0)
+                    sub.setPreferredSize(0, 0)
+                    p = _build_section_cell(
+                        canvas, sub, key, sections, name, first_vs
+                    )
+                    if first_vs is None:
+                        first_vs = p
+                    elif canvas._link_y and p is not None:
+                        p.setYLink(first_vs)
+                else:
+                    # Check if Vs extraction profiles need a sigma column
+                    needs_sigma = key in canvas._vs_extraction_keys
+                    if needs_sigma:
+                        # Vs extraction: Vs + sigma side-by-side
+                        sub = canvas.graphics_layout.addLayout(row=r, col=c)
+                        sub.setContentsMargins(0, 0, 0, 0)
+                        sub.layout.setSpacing(0)
+                        sub.setMinimumSize(0, 0)
+                        sub.setPreferredSize(0, 0)
+                        total = vs_r + sig_r
+                        sub.layout.setColumnStretchFactor(
+                            0, round((vs_r / total) * 100))
+                        sub.layout.setColumnStretchFactor(
+                            1, round((sig_r / total) * 100))
 
-                p = sub.addPlot(row=0, col=0, title=name)
-                canvas._plots[key] = p
-                configure_vs_plot(canvas, p, key)
+                        p = sub.addPlot(row=0, col=0, title=name)
+                        canvas._plots[key] = p
+                        configure_vs_plot(canvas, p, key)
 
-                sig_key = f"{key}_sigma"
-                p_sig = sub.addPlot(row=0, col=1)
-                canvas._plots[sig_key] = p_sig
-                configure_sigma_plot(canvas, p_sig, sig_key)
-                p_sig.setYLink(p)
+                        sig_key = f"{key}_sigma"
+                        p_sig = sub.addPlot(row=0, col=1)
+                        canvas._plots[sig_key] = p_sig
+                        configure_sigma_plot(canvas, p_sig, sig_key)
+                        p_sig.setYLink(p)
+                    else:
+                        # Soil profiles only: no sigma column needed
+                        p = canvas.graphics_layout.addPlot(
+                            row=r, col=c, title=name,
+                        )
+                        canvas._plots[key] = p
+                        configure_vs_plot(canvas, p, key)
 
-                if first_vs is None:
-                    first_vs = p
-                elif canvas._link_y:
-                    p.setYLink(first_vs)
+                    if first_vs is None:
+                        first_vs = p
+                    elif canvas._link_y:
+                        p.setYLink(first_vs)
             else:
                 p = canvas.graphics_layout.addPlot(
                     row=r, col=c,
@@ -266,6 +301,65 @@ def configure_sigma_plot(canvas, plot: pg.PlotItem, subplot_key: str):
         lambda ev, p=plot: canvas._on_plot_clicked(ev, p)
     )
     _add_legend_to_plot(canvas, plot, subplot_key)
+
+
+_SECTION_LABELS = {"vs": "Vs", "vp": "Vp", "density": "Density"}
+
+
+def configure_section_plot(canvas, plot: pg.PlotItem, subplot_key: str,
+                           prop: str, is_first: bool):
+    """Configure one sub-section of a multi-property soil profile cell."""
+    vel_unit = "ft/s" if canvas._velocity_unit == "imperial" else "m/s"
+    depth_unit = "ft" if canvas._velocity_unit == "imperial" else "m"
+    if prop == "density":
+        x_label = "Density (kg/m3)"
+    else:
+        x_label = f"{_SECTION_LABELS.get(prop, prop)} ({vel_unit})"
+    plot.setLabel("bottom", x_label)
+    if is_first:
+        plot.setLabel("left", f"Depth ({depth_unit})")
+    else:
+        plot.setLabel("left", "")
+        plot.getAxis("left").setStyle(showValues=False)
+        plot.getAxis("left").setWidth(0)
+    plot.showGrid(x=True, y=True, alpha=0.3)
+    plot.invertY(True)
+    for axis_name in ["bottom", "left"]:
+        axis = plot.getAxis(axis_name)
+        axis.enableAutoSIPrefix(False)
+        axis.setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+    plot.setMouseEnabled(x=True, y=True)
+    plot.enableAutoRange()
+    plot.vb.menu = build_context_menu(canvas, plot)
+    plot.scene().sigMouseClicked.connect(
+        lambda ev, p=plot: canvas._on_plot_clicked(ev, p)
+    )
+    _add_legend_to_plot(canvas, plot, subplot_key)
+
+
+def _build_section_cell(canvas, sub, key, sections, title, first_vs_ref):
+    """Build multi-property sub-section plots within a sub-layout.
+
+    Returns the first PlotItem created (for Y-axis linking).
+    """
+    n = len(sections)
+    for i in range(n):
+        sub.layout.setColumnStretchFactor(i, 100)
+    first_plot = None
+    for i, prop in enumerate(sections):
+        sec_key = f"{key}_sp_{prop}"
+        is_first = (i == 0)
+        p = sub.addPlot(row=0, col=i, title=(title if is_first else ""))
+        canvas._plots[sec_key] = p
+        configure_section_plot(canvas, p, sec_key, prop, is_first)
+        if first_plot is None:
+            first_plot = p
+        else:
+            p.setYLink(first_plot)
+    # Also register the parent key pointing to the first section
+    if first_plot is not None:
+        canvas._plots[key] = first_plot
+    return first_plot
 
 
 def _add_legend_to_plot(canvas, plot: pg.PlotItem, subplot_key: str):

@@ -31,6 +31,8 @@ def create_subplots(
     plot_h = max((top - bottom) * h, 0.1)
     plot_w = max((right - left) * w, 0.1)
 
+    sections = getattr(state, 'soil_profile_sections', {}) or {}
+
     if state.layout_mode == "vs_profile":
         return _create_vs_profile_layout(fig, settings, left, right, top, bottom)
     elif state.layout_mode == "split_wave":
@@ -54,12 +56,47 @@ def create_subplots(
             fig, state, settings, left, right, top, bottom, hs, ws,
         )
     else:
-        # Combined — single subplot
+        # Combined — single subplot or multi-section
+        main_sections = sections.get("main")
+        if main_sections and len(main_sections) > 1:
+            return _create_section_layout(
+                fig, "main", main_sections, left, right, top, bottom
+            )
         gs = GridSpec(
             1, 1, figure=fig,
             left=left, right=right, bottom=bottom, top=top,
         )
         return {"main": fig.add_subplot(gs[0, 0])}
+
+
+def _create_section_layout(
+    fig: Figure,
+    parent_key: str,
+    sections: list,
+    left: float, right: float, top: float, bottom: float,
+) -> Dict[str, object]:
+    """Create side-by-side sub-sections for multi-property soil profile."""
+    from matplotlib.gridspec import GridSpec as GS
+    n = len(sections)
+    gs = GS(
+        1, n, figure=fig,
+        left=left, right=right, bottom=bottom, top=top,
+        wspace=0.05,
+    )
+    axes = {}
+    first_ax = None
+    for i, prop in enumerate(sections):
+        sec_key = f"{parent_key}_sp_{prop}"
+        if first_ax is None:
+            ax = fig.add_subplot(gs[0, i])
+            first_ax = ax
+        else:
+            ax = fig.add_subplot(gs[0, i], sharey=first_ax)
+        axes[sec_key] = ax
+    # Map parent key to first section
+    if first_ax is not None:
+        axes[parent_key] = first_ax
+    return axes
 
 
 def _create_vs_profile_layout(
@@ -97,6 +134,7 @@ def _create_grid_layout(
 
     rows, cols = state.grid_rows, state.grid_cols
     stypes = state.subplot_types
+    sections = getattr(state, 'soil_profile_sections', {}) or {}
 
     col_ratios = list(state.grid_col_ratios)
     while len(col_ratios) < cols:
@@ -125,8 +163,28 @@ def _create_grid_layout(
         for c in range(cols):
             key = f"cell_{r}_{c}"
             cell_type = stypes.get(key, "dc")
+            cell_sections = sections.get(key)
 
-            if cell_type == "vs_profile":
+            if cell_type == "vs_profile" and cell_sections and len(cell_sections) > 1:
+                # Multi-property sub-sections
+                n_sec = len(cell_sections)
+                inner = GridSpecFromSubplotSpec(
+                    1, n_sec,
+                    subplot_spec=gs[r, c],
+                    wspace=0.05,
+                )
+                first_ax = None
+                for i, prop in enumerate(cell_sections):
+                    sec_key = f"{key}_sp_{prop}"
+                    if first_ax is None:
+                        ax = fig.add_subplot(inner[0, i])
+                        first_ax = ax
+                    else:
+                        ax = fig.add_subplot(inner[0, i], sharey=first_ax)
+                    axes[sec_key] = ax
+                if first_ax is not None:
+                    axes[key] = first_ax
+            elif cell_type == "vs_profile":
                 # Subdivide this single cell into 2 sub-columns
                 inner = GridSpecFromSubplotSpec(
                     1, 2,
@@ -139,8 +197,6 @@ def _create_grid_layout(
                 axes[key] = ax_vs
                 axes[f"{key}_sigma"] = ax_sig
             elif c in vs_cols:
-                # DC cell in a column that has vs_profile elsewhere —
-                # just use the full cell (no subdivision needed)
                 axes[key] = fig.add_subplot(gs[r, c])
             else:
                 axes[key] = fig.add_subplot(gs[r, c])

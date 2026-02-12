@@ -227,9 +227,118 @@ class EnsembleHandlersMixin:
     def _on_vs_profile(self):
         """Open Vs Profile dialog to extract profiles from .report."""
         from geo_figure.gui.dialogs.vs_profile_dialog import VsProfileDialog
-        dlg = VsProfileDialog(self)
-        dlg.extraction_complete.connect(self._on_profile_extraction_complete)
+        canvas = self.sheet_tabs.get_current_canvas()
+        subplot_info = canvas.get_subplot_info() if canvas else None
+        dlg = VsProfileDialog(self, subplot_info=subplot_info)
+        dlg.extraction_complete.connect(self._on_multi_extraction_complete)
+        dlg.extraction_complete_single.connect(
+            self._on_profile_extraction_complete
+        )
         dlg.exec()
+
+    def _on_multi_extraction_complete(self, results_list):
+        """Handle multi-property extraction results.
+
+        Parameters
+        ----------
+        results_list : list of (profiles, params)
+            One entry per extracted property.
+        """
+        if len(results_list) == 1:
+            # Single property -- use legacy path
+            profiles, params = results_list[0]
+            self._on_profile_extraction_complete(profiles, params)
+            return
+
+        from geo_figure.core.profile_processing import process_profiles
+        from geo_figure.core.models import VsProfileData
+        from geo_figure.gui.canvas.plot_canvas import LAYOUT_GRID
+
+        canvas = self.sheet_tabs.get_current_canvas()
+        ptype_labels = {"vs": "Vs", "vp": "Vp", "rho": "Density"}
+        created_profiles = {}
+
+        for profiles, params in results_list:
+            profile_type = params.get("profile_type", "vs")
+            depth_max = params.get("depth_max", 200.0)
+            units = params.get("units", "m")
+            target_key = params.get("target_subplot")
+            ptype_label = ptype_labels.get(profile_type, "Vs")
+
+            try:
+                results = process_profiles(
+                    profiles, dz=0.1, z_max=depth_max
+                )
+            except Exception as e:
+                self.log_panel.log_error(
+                    f"{ptype_label} processing failed: {e}"
+                )
+                continue
+
+            # Auto-detect actual data depth
+            data_depth = 0.0
+            for d, v in profiles:
+                finite = d[np.isfinite(d) & (d > 0)]
+                if len(finite) > 0:
+                    data_depth = max(data_depth, float(np.max(finite)))
+            if data_depth <= 0:
+                data_depth = depth_max
+
+            # Determine subplot target
+            if target_key is None:
+                target_key = canvas.active_subplot or "main"
+
+            # Convert target cell to vs_profile type
+            if canvas._subplot_types.get(target_key) != "vs_profile":
+                canvas.set_subplot_type(target_key, "vs_profile")
+            canvas.rename_subplot(target_key, ptype_label)
+
+            prof = VsProfileData(
+                name=f"{ptype_label} Profile",
+                profile_type=profile_type,
+                n_profiles=len(profiles),
+                subplot_key=target_key,
+                profiles=profiles,
+                depth_grid=results["depth_grid"],
+                median=results["median"],
+                p_low=results["p_low"],
+                p_high=results["p_high"],
+                sigma_ln=results["sigma_ln"],
+                median_depth_paired=results.get("median_depth_paired"),
+                median_vel_paired=results.get("median_vel_paired"),
+                vs30_values=results.get("vs30_values"),
+                vs100_values=results.get("vs100_values"),
+                depth_max_plot=data_depth,
+            )
+
+            self._vs_profiles[prof.uid] = prof
+            canvas.add_vs_profile(prof)
+            self.curve_tree.add_vs_profile(prof)
+            created_profiles[profile_type] = prof
+
+            # Save outputs
+            self._save_profile_csv(prof, units=units)
+
+            raw_text = params.get("raw_text", "")
+            if raw_text:
+                self._save_raw_profile_txt(ptype_label, raw_text)
+
+            # Save Geopsy-format median txt (per property)
+            self._save_geopsy_median_txt(prof, ptype_label)
+
+            # Save Dinver-style paired-format txt (per property)
+            self._save_dinver_style_txt(prof, ptype_label)
+
+            vs30_str = (
+                f"Vs30={prof.vs30_mean:.1f} m/s" if prof.vs30_mean else ""
+            )
+            self.log_panel.log_success(
+                f"{ptype_label} Profile: {len(profiles)} models. {vs30_str}"
+            )
+
+        # Save combined Geopsy-format file with all properties
+        if len(created_profiles) > 1:
+            self._save_combined_geopsy_txt(created_profiles)
 
     def _on_profile_extraction_complete(self, profiles, params):
         """Handle completed profile extraction -- create Vs Profile sheet + render."""
@@ -310,10 +419,16 @@ class EnsembleHandlersMixin:
         units = params.get("units", "m")
         self._save_profile_csv(prof, units=units)
 
-        # Save raw gpprofile output text to Vs folder
+        # Save raw gpprofile output text to Profile folder
         raw_text = params.get("raw_text", "")
         if raw_text:
             self._save_raw_profile_txt(ptype_label, raw_text)
+
+        # Save Geopsy-format median txt
+        self._save_geopsy_median_txt(prof, ptype_label)
+
+        # Save Dinver-style paired-format txt
+        self._save_dinver_style_txt(prof, ptype_label)
 
         vs30_str = f"Vs30={prof.vs30_mean:.1f} m/s" if prof.vs30_mean else ""
         self.log_panel.log_success(
@@ -321,7 +436,7 @@ class EnsembleHandlersMixin:
         )
 
     def _save_profile_csv(self, prof, units="m"):
-        """Save comprehensive Vs profile outputs to project/Vs/ dir.
+        """Save comprehensive profile outputs to project/Profile/ dir.
 
         Generates the same files as the old vs_profile_analysis package:
         - Paired-format median CSV
@@ -336,7 +451,7 @@ class EnsembleHandlersMixin:
         if project_dir is None or prof.depth_grid is None:
             return
 
-        vs_dir = Path(project_dir) / "Vs"
+        vs_dir = Path(project_dir) / "Profile"
         vs_dir.mkdir(parents=True, exist_ok=True)
         name = prof.display_name.replace(" ", "_").replace("/", "_")
 
@@ -541,16 +656,188 @@ class EnsembleHandlersMixin:
         self.log_panel.log_info(f"Saved: {fpath.name}")
 
     def _save_raw_profile_txt(self, ptype_label, raw_text):
-        """Save the raw gpprofile output text to the Vs output dir."""
+        """Save the raw gpprofile output text to the Profile output dir."""
         from pathlib import Path
         project_dir = getattr(self, '_project_dir', None)
         if not project_dir or not raw_text:
             return
-        vs_dir = Path(project_dir) / "Vs"
-        vs_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = Path(project_dir) / "Profile"
+        out_dir.mkdir(parents=True, exist_ok=True)
         name = ptype_label.replace(" ", "_")
-        fpath = vs_dir / f"{name}_gpprofile_raw.txt"
+        fpath = out_dir / f"{name}_gpprofile_raw.txt"
         fpath.write_text(raw_text, encoding="utf-8")
+        self.log_panel.log_info(f"Saved: {fpath.name}")
+
+    @staticmethod
+    def _paired_to_layers(depth_paired, vel_paired):
+        """Convert paired step-function arrays to a list of (thickness, value).
+
+        The paired format stores each layer as two consecutive points:
+        ``[d_top, d_bot, d_bot, d_next_bot, ...]`` with matching values.
+        We step through in increments of 2 to preserve every layer boundary,
+        even when adjacent layers share the same value.
+        The last entry gets thickness=0 (halfspace).
+        """
+        import numpy as np
+        depth_p = np.asarray(depth_paired, dtype=float)
+        vel_p = np.asarray(vel_paired, dtype=float)
+        layers = []
+        for k in range(0, len(depth_p) - 1, 2):
+            thickness = depth_p[k + 1] - depth_p[k]
+            val = vel_p[k]
+            layers.append((thickness, val))
+        if layers:
+            layers[-1] = (0.0, layers[-1][1])
+        return layers
+
+    def _save_geopsy_median_txt(self, prof, ptype_label):
+        """Save a Geopsy-format median model txt file for one property.
+
+        Format:
+            N_layers+1
+            thickness  Vp  Vs  density
+            ...
+            0  Vp_hs  Vs_hs  density_hs
+        Only the column matching the extracted property has real values;
+        the other columns are filled with 0.
+        """
+        from pathlib import Path
+
+        project_dir = getattr(self, '_project_dir', None)
+        if not project_dir:
+            return
+        if prof.median_depth_paired is None or prof.median_vel_paired is None:
+            return
+
+        out_dir = Path(project_dir) / "Profile"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        layers = self._paired_to_layers(
+            prof.median_depth_paired, prof.median_vel_paired
+        )
+
+        if not layers:
+            return
+
+        # Last layer is halfspace (thickness = 0)
+        layers[-1] = (0.0, layers[-1][1])
+
+        n_entries = len(layers)
+        ptype = prof.profile_type
+
+        lines = [str(n_entries)]
+        for thickness, val in layers:
+            if ptype == "vs":
+                lines.append(f"{thickness:.6g} 0 {val:.6g} 0")
+            elif ptype == "vp":
+                lines.append(f"{thickness:.6g} {val:.6g} 0 0")
+            elif ptype == "rho":
+                lines.append(f"{thickness:.6g} 0 0 {val:.6g}")
+            else:
+                lines.append(f"{thickness:.6g} 0 {val:.6g} 0")
+
+        name = ptype_label.replace(" ", "_")
+        fpath = out_dir / f"{name}_median_model.txt"
+        fpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.log_panel.log_info(f"Saved: {fpath.name}")
+
+    def _save_dinver_style_txt(self, prof, ptype_label):
+        """Save a Dinver-style paired-format text file for one property.
+
+        Format::
+            # Vs
+                value   depth
+                value   depth
+                ...
+                value     inf
+        """
+        from pathlib import Path
+        import numpy as np
+
+        project_dir = getattr(self, '_project_dir', None)
+        if not project_dir:
+            return
+        if prof.median_depth_paired is None or prof.median_vel_paired is None:
+            return
+
+        out_dir = Path(project_dir) / "Profile"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        depth_p = np.asarray(prof.median_depth_paired, dtype=float)
+        vel_p = np.asarray(prof.median_vel_paired, dtype=float)
+
+        header = {"vs": "Vs", "vp": "Vp", "rho": "Density"}.get(
+            prof.profile_type, "Vs"
+        )
+        lines = [f"# {header}"]
+        for i in range(len(depth_p)):
+            d = depth_p[i]
+            v = vel_p[i]
+            d_str = "inf" if (np.isinf(d) or (i == len(depth_p) - 1)) else f"{d}"
+            lines.append(f"    {v}    {d_str}")
+
+        name = ptype_label.replace(" ", "_")
+        fpath = out_dir / f"{name}_median_dinver.txt"
+        fpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self.log_panel.log_info(f"Saved: {fpath.name}")
+
+    def _save_combined_geopsy_txt(self, prof_dict):
+        """Save a combined Geopsy-format file with all extracted properties.
+
+        Parameters
+        ----------
+        prof_dict : dict
+            Mapping of profile_type ('vs', 'vp', 'rho') to VsProfileData.
+            Must contain at least one entry.
+
+        Format::
+            N_layers+1
+            thickness  Vp  Vs  density
+            ...
+            0  Vp_hs  Vs_hs  density_hs
+        """
+        from pathlib import Path
+
+        project_dir = getattr(self, '_project_dir', None)
+        if not project_dir or not prof_dict:
+            return
+
+        out_dir = Path(project_dir) / "Profile"
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Extract layer tables from each available property
+        layer_tables = {}
+        for ptype, prof in prof_dict.items():
+            if prof.median_depth_paired is None or prof.median_vel_paired is None:
+                continue
+            layer_tables[ptype] = self._paired_to_layers(
+                prof.median_depth_paired, prof.median_vel_paired
+            )
+
+        if not layer_tables:
+            return
+
+        # Use the property with the most layers as the reference for thicknesses
+        ref_type = max(layer_tables, key=lambda k: len(layer_tables[k]))
+        ref_layers = layer_tables[ref_type]
+        n = len(ref_layers)
+
+        def get_val(ptype, idx):
+            tbl = layer_tables.get(ptype)
+            if tbl and idx < len(tbl):
+                return tbl[idx][1]
+            return 0.0
+
+        lines = [str(n)]
+        for idx in range(n):
+            thickness = ref_layers[idx][0]
+            vp = get_val("vp", idx)
+            vs = get_val("vs", idx)
+            rho = get_val("rho", idx)
+            lines.append(f"{thickness:.6g} {vp:.6g} {vs:.6g} {rho:.6g}")
+
+        fpath = out_dir / "combined_median_model.txt"
+        fpath.write_text("\n".join(lines) + "\n", encoding="utf-8")
         self.log_panel.log_info(f"Saved: {fpath.name}")
 
     def _on_vs_profile_layer_toggled(self, uid: str, layer_name: str, visible: bool):
@@ -596,7 +883,9 @@ class EnsembleHandlersMixin:
         sp_dict = sd.get("soil_profiles", {})
         profile = sp_dict.get(uid)
         if profile:
-            self.properties.show_soil_profile(uid, profile)
+            # Find the group this profile belongs to (if any)
+            group = self._find_group_for_profile(uid)
+            self.properties.show_soil_profile(uid, profile, group=group)
             self.status_bar.showMessage(
                 f"Selected: {profile.display_name} | {profile.n_layers} layers"
             )
@@ -628,3 +917,68 @@ class EnsembleHandlersMixin:
         sp_dict[uid] = profile
         canvas = self.sheet_tabs.get_current_canvas()
         canvas._rebuild_soil_profile(uid)
+
+    def _find_group_for_profile(self, uid: str):
+        """Find the SoilProfileGroup that contains the profile with the given uid."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        for grp in sd.get("soil_profile_groups", {}).values():
+            for prof in grp.profiles:
+                if prof.uid == uid:
+                    return grp
+        return None
+
+    def _on_group_stats_requested(self, group_uid: str):
+        """Compute or update group statistics for a SoilProfileGroup."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        groups = sd.get("soil_profile_groups", {})
+        group = groups.get(group_uid)
+        if group is None:
+            self.log_panel.log_error(f"Group not found: {group_uid}")
+            return
+
+        # Update toggles and style from properties panel
+        group.show_median = self.properties.sp_show_median_check.isChecked()
+        group.show_percentile = self.properties.sp_show_percentile_check.isChecked()
+        group.show_individual = self.properties.sp_show_individual_check.isChecked()
+        group.median_color = self.properties.sp_median_color_hex.text()
+        group.median_line_width = self.properties.sp_median_width_spin.value()
+        group.percentile_color = self.properties.sp_pct_color_hex.text()
+        group.percentile_alpha = round(
+            self.properties.sp_pct_alpha_spin.value() * 255 / 100
+        )
+
+        # Apply individual visibility based on show_individual toggle
+        for prof in group.profiles:
+            prof.visible = group.show_individual
+
+        # Compute statistics if not yet done
+        if not group.has_statistics:
+            from geo_figure.core.soil_profile_stats import compute_group_statistics
+            ok = compute_group_statistics(
+                group,
+                depth_step=0.5,
+                render_property=group.profiles[0].render_property if group.profiles else "vs",
+            )
+            if ok:
+                self.log_panel.log_success(
+                    f"Computed statistics for {group.display_name}: "
+                    f"{len(group.depth_grid)} depth points, "
+                    f"{len([p for p in group.profiles if p.visible])} profiles"
+                )
+            else:
+                self.log_panel.log_error(
+                    f"Failed to compute statistics for {group.display_name}: "
+                    f"need at least 2 visible profiles"
+                )
+
+        # Rebuild canvas rendering
+        canvas = self.sheet_tabs.get_current_canvas()
+        from geo_figure.gui.canvas.plot_canvas_modules.soil_profile_renderer import (
+            rebuild_group_stats,
+        )
+        for prof in group.profiles:
+            canvas._rebuild_soil_profile(prof.uid)
+        rebuild_group_stats(canvas, group)
+
+        # Update properties panel
+        self.properties.show_soil_profile_group(group_uid, group)

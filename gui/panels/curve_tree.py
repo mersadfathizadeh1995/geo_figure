@@ -403,13 +403,22 @@ class CurveTreePanel(QWidget):
 
     def remove_soil_profile(self, uid: str):
         """Remove a soil profile (or group) from the tree."""
-        item = self._soil_profiles.get(uid)
-        if item:
-            parent = item.parent()
-            if parent:
-                parent.removeChild(item)
-            del self._soil_profiles[uid]
-            self._update_counts()
+        item = self._soil_profiles.pop(uid, None)
+        if not item:
+            return
+        # If this is a group root, clean up child refs before Qt destroys them
+        child_count = item.childCount()
+        for i in range(child_count):
+            child = item.child(i)
+            if child:
+                child_uid_raw = child.data(0, _ROLE_UID)
+                if child_uid_raw:
+                    child_uid = str(child_uid_raw).replace(_SOIL_PREFIX, "")
+                    self._soil_profiles.pop(child_uid, None)
+        parent = item.parent()
+        if parent:
+            parent.removeChild(item)
+        self._update_counts()
 
     def clear_all(self):
         """Remove all curves, ensembles, and profiles from the tree."""

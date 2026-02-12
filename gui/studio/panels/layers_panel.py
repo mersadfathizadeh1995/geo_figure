@@ -99,6 +99,21 @@ class LayersPanel(QWidget):
                     continue
                 self._add_vs_item(sp_item, p)
 
+            # Soil Profiles in this subplot
+            soil_profs = getattr(state, "soil_profiles", []) or []
+            for sp in soil_profs:
+                if not self._vs_matches(sp.subplot_key, sp_key, sp_keys):
+                    continue
+                self._add_soil_profile_item(sp_item, sp)
+
+            # Soil Profile Groups (statistics layers)
+            soil_groups = getattr(state, "soil_profile_groups", []) or []
+            for grp in soil_groups:
+                if not self._vs_matches(grp.subplot_key, sp_key, sp_keys):
+                    continue
+                if grp.has_statistics:
+                    self._add_group_stats_item(sp_item, grp)
+
         self._tree.blockSignals(False)
 
     # ── Item builders ─────────────────────────────────────────────
@@ -155,6 +170,41 @@ class LayersPanel(QWidget):
             sub.setCheckState(0, Qt.Checked if layer.visible else Qt.Unchecked)
             sub.setData(0, Qt.UserRole, ("vs_layer", p.uid, lname.lower()))
 
+    def _add_soil_profile_item(self, parent, sp):
+        item = QTreeWidgetItem(parent)
+        item.setText(0, sp.display_name)
+        item.setCheckState(0, Qt.Checked if sp.visible else Qt.Unchecked)
+        item.setData(0, Qt.UserRole, ("soil_profile", sp.uid))
+        try:
+            from PySide6.QtGui import QColor
+            item.setForeground(0, QColor(sp.color))
+        except Exception:
+            pass
+
+    def _add_group_stats_item(self, parent, grp):
+        """Add a group node with Median / Percentile sub-layers."""
+        item = QTreeWidgetItem(parent)
+        item.setText(0, f"{grp.display_name} Statistics")
+        item.setExpanded(True)
+        font = item.font(0)
+        font.setItalic(True)
+        item.setFont(0, font)
+
+        med = QTreeWidgetItem(item)
+        med.setText(0, "Median")
+        med.setCheckState(0, Qt.Checked if grp.show_median else Qt.Unchecked)
+        med.setData(0, Qt.UserRole, ("group_stats", grp.uid, "median"))
+        try:
+            from PySide6.QtGui import QColor
+            med.setForeground(0, QColor(grp.median_color))
+        except Exception:
+            pass
+
+        pct = QTreeWidgetItem(item)
+        pct.setText(0, "5-95 Percentile")
+        pct.setCheckState(0, Qt.Checked if grp.show_percentile else Qt.Unchecked)
+        pct.setData(0, Qt.UserRole, ("group_stats", grp.uid, "percentile"))
+
     # ── Checkbox handler ──────────────────────────────────────────
 
     def _on_item_changed(self, item, column):
@@ -194,6 +244,21 @@ class LayersPanel(QWidget):
                     layer = getattr(p, f"{layer_name}_layer", None)
                     if layer:
                         layer.visible = checked
+                    break
+        elif kind == "soil_profile":
+            uid = data[1]
+            for sp in getattr(self._state, "soil_profiles", []) or []:
+                if sp.uid == uid:
+                    sp.visible = checked
+                    break
+        elif kind == "group_stats":
+            uid, layer_name = data[1], data[2]
+            for grp in getattr(self._state, "soil_profile_groups", []) or []:
+                if grp.uid == uid:
+                    if layer_name == "median":
+                        grp.show_median = checked
+                    elif layer_name == "percentile":
+                        grp.show_percentile = checked
                     break
 
         self.visibility_changed.emit()

@@ -207,7 +207,11 @@ _HEADER_MAP = {
 
 
 def _normalise_header(h: str) -> str:
-    return h.strip().lower().replace(" ", "").replace("_", "")
+    import re
+    s = h.strip().lower().replace(" ", "").replace("_", "")
+    # Strip any parenthesized unit suffix, e.g. "vs(ft/s)" -> "vs"
+    s = re.sub(r"\(.*?\)$", "", s)
+    return s
 
 
 def _map_headers(raw_headers):

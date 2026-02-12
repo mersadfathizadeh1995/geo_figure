@@ -164,3 +164,50 @@ def detect_stddev_type(
             return "COV (multiplier, e.g. 1.10)"
 
     return "LogStd"
+
+
+# ---------------------------------------------------------------------------
+# Imperial / metric unit conversion
+# ---------------------------------------------------------------------------
+
+FT_TO_M = 0.3048
+
+
+def convert_soil_profile_ft_to_m(prof):
+    """Convert a SoilProfile from imperial (ft, ft/s) to metric (m, m/s).
+
+    Modifies the profile in-place.  Converts depth/thickness fields and
+    velocity fields (Vs, Vp).  Density is assumed already in kg/m3.
+    """
+    for attr in ("thickness", "top_depth", "bot_depth",
+                 "depth_low", "depth_high"):
+        arr = getattr(prof, attr, None)
+        if arr is not None:
+            converted = np.asarray(arr, dtype=float) * FT_TO_M
+            # Preserve inf (halfspace marker)
+            converted[np.isinf(arr)] = np.inf
+            setattr(prof, attr, converted)
+
+    for attr in ("vs", "vp", "vs_low", "vs_high"):
+        arr = getattr(prof, attr, None)
+        if arr is not None:
+            setattr(prof, attr, np.asarray(arr, dtype=float) * FT_TO_M)
+
+    # Recompute halfspace extension if present
+    if hasattr(prof, "halfspace_extension") and prof.halfspace_extension:
+        prof.halfspace_extension = prof.halfspace_extension * FT_TO_M
+
+
+def convert_dc_curve_ft_to_m(curve):
+    """Convert a DispersionCurve velocity from ft/s to m/s.
+
+    Frequency stays in Hz.  Modifies the curve in-place and
+    recomputes slowness from the converted velocity.
+    """
+    if curve.velocity is not None:
+        curve.velocity = np.asarray(curve.velocity, dtype=float) * FT_TO_M
+    if curve.slowness is not None:
+        v = curve.velocity
+        if v is not None:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                curve.slowness = np.where(v != 0, 1.0 / v, 0.0)

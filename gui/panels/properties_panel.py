@@ -37,6 +37,7 @@ class PropertiesPanel(
         self._current_ensemble: Optional[EnsembleData] = None
         self._current_profile: Optional[VsProfileData] = None
         self._current_soil_profile: Optional[SoilProfile] = None
+        self._current_group_uid: Optional[str] = None
         self._updating = False
         self._setup_ui()
 
@@ -155,7 +156,7 @@ class PropertiesPanel(
 
         self._updating = False
 
-    def show_soil_profile(self, uid: str, profile: SoilProfile):
+    def show_soil_profile(self, uid: str, profile: SoilProfile, group=None):
         """Display properties for a loaded soil profile."""
         self._updating = True
         self._current_uid = uid
@@ -163,6 +164,7 @@ class PropertiesPanel(
         self._current_ensemble = None
         self._current_profile = None
         self._current_soil_profile = profile
+        self._current_group_uid = None
 
         self.empty_label.setVisible(False)
         self.info_group.setVisible(False)
@@ -175,8 +177,14 @@ class PropertiesPanel(
         self.vs_layer_group.setVisible(False)
         self.sp_info_group.setVisible(True)
         self.sp_style_group.setVisible(True)
+        self.sp_stats_group.setVisible(False)
 
         self._populate_soil_profile(profile)
+
+        # Show group stats section if this profile belongs to a group with multiple profiles
+        if group is not None and len(group.profiles) > 1:
+            self.show_soil_profile_group(group.uid, group)
+
         self._updating = False
 
     def clear(self):
@@ -186,6 +194,7 @@ class PropertiesPanel(
         self._current_ensemble = None
         self._current_profile = None
         self._current_soil_profile = None
+        self._current_group_uid = None
         self.empty_label.setVisible(True)
         self.info_group.setVisible(False)
         self.style_group.setVisible(False)
@@ -197,6 +206,7 @@ class PropertiesPanel(
         self.vs_layer_group.setVisible(False)
         self.sp_info_group.setVisible(False)
         self.sp_style_group.setVisible(False)
+        self.sp_stats_group.setVisible(False)
 
     # ── Emit helpers ─────────────────────────────────────────────
 
@@ -208,6 +218,7 @@ class PropertiesPanel(
 
     vs_profile_updated = Signal(str, object)  # uid, VsProfileData
     soil_profile_updated = Signal(str, object)  # uid, SoilProfile
+    group_stats_requested = Signal(str)  # group uid
 
     def _build_vs_profile_info(self, parent_layout):
         """Build the Vs profile info + display settings + layer style sections."""
@@ -485,6 +496,77 @@ class PropertiesPanel(
 
         parent_layout.addWidget(self.sp_style_group)
 
+        # Group statistics section (visible when a group is selected)
+        self.sp_stats_group, stats_content, stats_form = self._make_section(
+            "Group Statistics", expanded=True,
+        )
+        self.sp_stats_group.setVisible(False)
+
+        self.sp_compute_stats_btn = QPushButton("Compute Statistics")
+        self.sp_compute_stats_btn.clicked.connect(self._on_compute_group_stats)
+        stats_form.addRow(self.sp_compute_stats_btn)
+
+        self.sp_stats_status = QLabel("Not computed")
+        stats_form.addRow("Status:", self.sp_stats_status)
+
+        from PySide6.QtWidgets import QCheckBox
+
+        # -- Individual profiles toggle --
+        self.sp_show_individual_check = QCheckBox("Show Individual Profiles")
+        self.sp_show_individual_check.setChecked(True)
+        self.sp_show_individual_check.toggled.connect(self._on_sp_stats_toggled)
+        stats_form.addRow(self.sp_show_individual_check)
+
+        # -- Median controls --
+        self.sp_show_median_check = QCheckBox("Show Median")
+        self.sp_show_median_check.setChecked(True)
+        self.sp_show_median_check.toggled.connect(self._on_sp_stats_toggled)
+        stats_form.addRow(self.sp_show_median_check)
+
+        med_row = QHBoxLayout()
+        med_row.addWidget(QLabel("Color:"))
+        self.sp_median_color_btn = QPushButton()
+        self.sp_median_color_btn.setFixedSize(28, 28)
+        self.sp_median_color_btn.clicked.connect(self._pick_median_color)
+        med_row.addWidget(self.sp_median_color_btn)
+        self.sp_median_color_hex = QLabel("#D32F2F")
+        med_row.addWidget(self.sp_median_color_hex)
+        med_row.addStretch()
+        stats_form.addRow(med_row)
+
+        self.sp_median_width_spin = QDoubleSpinBox()
+        self.sp_median_width_spin.setRange(0.5, 8.0)
+        self.sp_median_width_spin.setSingleStep(0.5)
+        self.sp_median_width_spin.setValue(2.5)
+        self.sp_median_width_spin.valueChanged.connect(self._on_sp_stats_toggled)
+        stats_form.addRow("Median Width:", self.sp_median_width_spin)
+
+        # -- Percentile controls --
+        self.sp_show_percentile_check = QCheckBox("Show 5-95 Percentile")
+        self.sp_show_percentile_check.setChecked(True)
+        self.sp_show_percentile_check.toggled.connect(self._on_sp_stats_toggled)
+        stats_form.addRow(self.sp_show_percentile_check)
+
+        pct_row = QHBoxLayout()
+        pct_row.addWidget(QLabel("Color:"))
+        self.sp_pct_color_btn = QPushButton()
+        self.sp_pct_color_btn.setFixedSize(28, 28)
+        self.sp_pct_color_btn.clicked.connect(self._pick_percentile_color)
+        pct_row.addWidget(self.sp_pct_color_btn)
+        self.sp_pct_color_hex = QLabel("#E57373")
+        pct_row.addWidget(self.sp_pct_color_hex)
+        pct_row.addStretch()
+        stats_form.addRow(pct_row)
+
+        self.sp_pct_alpha_spin = QSpinBox()
+        self.sp_pct_alpha_spin.setRange(0, 100)
+        self.sp_pct_alpha_spin.setValue(31)
+        self.sp_pct_alpha_spin.setSuffix("%")
+        self.sp_pct_alpha_spin.valueChanged.connect(self._on_sp_stats_toggled)
+        stats_form.addRow("Band Opacity:", self.sp_pct_alpha_spin)
+
+        parent_layout.addWidget(self.sp_stats_group)
+
     def _populate_soil_profile(self, profile: SoilProfile):
         """Fill soil profile info and style fields."""
         import numpy as np
@@ -582,3 +664,91 @@ class PropertiesPanel(
         self.soil_profile_updated.emit(
             self._current_uid, self._current_soil_profile,
         )
+
+    # ── Group statistics handlers ──────────────────────────────────
+
+    def _on_compute_group_stats(self):
+        """Emit signal to compute group statistics."""
+        if self._current_group_uid:
+            self.group_stats_requested.emit(self._current_group_uid)
+
+    def _on_sp_stats_toggled(self):
+        """Update group statistics display toggles."""
+        if self._updating or not self._current_group_uid:
+            return
+        self.group_stats_requested.emit(self._current_group_uid)
+
+    def _pick_median_color(self):
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        if not self._current_group_uid:
+            return
+        color = QColorDialog.getColor(
+            QColor(self.sp_median_color_hex.text()),
+            self, "Median Color",
+        )
+        if color.isValid():
+            self._update_stats_color_btn(
+                self.sp_median_color_btn, self.sp_median_color_hex,
+                color.name(),
+            )
+            if not self._updating:
+                self.group_stats_requested.emit(self._current_group_uid)
+
+    def _pick_percentile_color(self):
+        from PySide6.QtWidgets import QColorDialog
+        from PySide6.QtGui import QColor
+        if not self._current_group_uid:
+            return
+        color = QColorDialog.getColor(
+            QColor(self.sp_pct_color_hex.text()),
+            self, "Percentile Color",
+        )
+        if color.isValid():
+            self._update_stats_color_btn(
+                self.sp_pct_color_btn, self.sp_pct_color_hex,
+                color.name(),
+            )
+            if not self._updating:
+                self.group_stats_requested.emit(self._current_group_uid)
+
+    def _update_stats_color_btn(self, btn, hex_label, color_str):
+        from PySide6.QtGui import QColor, QPixmap
+        pixmap = QPixmap(24, 24)
+        pixmap.fill(QColor(color_str))
+        btn.setIcon(pixmap)
+        btn.setStyleSheet(
+            f"background-color: {color_str}; border: 1px solid #555555;"
+        )
+        hex_label.setText(color_str)
+
+    def show_soil_profile_group(self, uid: str, group):
+        """Show properties for a SoilProfileGroup (statistics controls)."""
+        self._current_group_uid = uid
+        self.sp_stats_group.setVisible(True)
+        if group.has_statistics:
+            self.sp_stats_status.setText(
+                f"Computed ({len(group.depth_grid)} depth points)"
+            )
+        else:
+            self.sp_stats_status.setText("Not computed")
+        self._updating = True
+        self.sp_show_median_check.setChecked(group.show_median)
+        self.sp_show_percentile_check.setChecked(group.show_percentile)
+        self.sp_show_individual_check.setChecked(group.show_individual)
+        self.sp_median_width_spin.setValue(group.median_line_width)
+        self._update_stats_color_btn(
+            self.sp_median_color_btn, self.sp_median_color_hex,
+            group.median_color,
+        )
+        self._update_stats_color_btn(
+            self.sp_pct_color_btn, self.sp_pct_color_hex,
+            group.percentile_color,
+        )
+        self.sp_pct_alpha_spin.setValue(round(group.percentile_alpha * 100 / 255))
+        self._updating = False
+
+    def hide_group_stats(self):
+        """Hide the group stats section."""
+        self.sp_stats_group.setVisible(False)
+        self._current_group_uid = None

@@ -51,6 +51,8 @@ class PlotCanvas(QWidget):
         self._plots: Dict[str, pg.PlotItem] = {}
         self._subplot_names: Dict[str, str] = {}
         self._subplot_types: Dict[str, str] = {}
+        self._soil_profile_sections: Dict[str, list] = {}  # key -> ["vs","vp",...]
+        self._vs_extraction_keys: set = set()  # subplot keys with Vs extraction data
         self._active_subplot: Optional[str] = None
         self._velocity_unit: str = "metric"
         self._legends: Dict[str, pg.LegendItem] = {}
@@ -95,11 +97,16 @@ class PlotCanvas(QWidget):
         saved_ensembles = {eid: info["data"] for eid, info in self._ensembles.items()}
         saved_profiles = {uid: info["data"] for uid, info in self._vs_profiles.items()}
         saved_soil = {uid: info["data"] for uid, info in self._soil_profiles.items()}
+        # Expose which subplot keys have Vs extraction profiles for layout
+        self._vs_extraction_keys = {
+            p.subplot_key for p in saved_profiles.values()
+        }
         self._curves.clear()
         self._ensembles.clear()
         self._vs_profiles.clear()
         self._soil_profiles.clear()
         self._build_layout()
+        self._vs_extraction_keys = set()
         for uid, curve in saved_curves.items():
             self.add_curve(curve)
         for eid, ens in saved_ensembles.items():
@@ -149,6 +156,14 @@ class PlotCanvas(QWidget):
         self._subplot_types[key] = stype
         self.rebuild()
 
+    def set_soil_profile_sections(self, key: str, props: list):
+        """Set multi-property sub-section layout for a vs_profile subplot."""
+        if props and len(props) > 1:
+            self._soil_profile_sections[key] = list(props)
+        else:
+            self._soil_profile_sections.pop(key, None)
+        self.rebuild()
+
     def set_link_y(self, linked: bool):
         self._link_y = linked
         self.rebuild()
@@ -162,12 +177,14 @@ class PlotCanvas(QWidget):
             (k, self._subplot_names.get(k, k))
             for k in self._plots.keys()
             if not k.endswith("_sigma") and k != "sigma_ln"
+            and "_sp_" not in k
         ]
 
     def get_subplot_keys(self) -> list:
         return [
             k for k in self._plots.keys()
             if not k.endswith("_sigma") and k != "sigma_ln"
+            and "_sp_" not in k
         ]
 
     def rename_subplot(self, key: str, name: str):
@@ -189,6 +206,9 @@ class PlotCanvas(QWidget):
             "link_x": self._link_x,
             "subplot_names": dict(self._subplot_names),
             "subplot_types": dict(self._subplot_types),
+            "soil_profile_sections": {
+                k: list(v) for k, v in self._soil_profile_sections.items()
+            },
         }
 
     def _get_plot_column(self, plot):
@@ -336,6 +356,12 @@ class PlotCanvas(QWidget):
         self._legend_mode = getattr(config, 'legend_mode', 'per_subplot')
         vs_ratios = getattr(config, 'vs_internal_ratios', (0.75, 0.25))
         self._vs_internal_ratios = tuple(vs_ratios)
+        # Restore multi-property sections
+        sp_sections = getattr(config, 'soil_profile_sections', {})
+        if sp_sections:
+            self._soil_profile_sections = {
+                k: list(v) for k, v in sp_sections.items()
+            }
         self.set_legend_visible(self._legend_visible)
         self.set_legend_position(self._legend_pos, self._legend_offset)
         self.set_legend_font_size(self._legend_font_size)

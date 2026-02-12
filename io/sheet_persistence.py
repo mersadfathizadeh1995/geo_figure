@@ -303,6 +303,10 @@ def save_sheet(
     sp_metas = [_save_soil_profile(s, sp_dir)
                 for s in getattr(figure_state, 'soil_profiles', []) or []]
 
+    # Save soil profile group metadata
+    groups = getattr(figure_state, 'soil_profile_groups', []) or []
+    group_metas = [_save_soil_profile_group(g) for g in groups]
+
     # Build manifest
     manifest = {
         "version": SHEET_STATE_VERSION,
@@ -316,6 +320,10 @@ def save_sheet(
             "link_x": figure_state.link_x,
             "subplot_names": dict(figure_state.subplot_names),
             "subplot_types": dict(figure_state.subplot_types),
+            "soil_profile_sections": {
+                k: list(v) for k, v in
+                getattr(figure_state, 'soil_profile_sections', {}).items()
+            },
         },
         "display": {
             "theme": figure_state.theme,
@@ -325,6 +333,7 @@ def save_sheet(
         "ensembles": ens_metas,
         "vs_profiles": vs_metas,
         "soil_profiles": sp_metas,
+        "soil_profile_groups": group_metas,
     }
     _write_json(os.path.join(sheet_dir, "manifest.json"), manifest)
 
@@ -526,6 +535,63 @@ def _load_soil_profile(meta: dict, sp_dir: str):
     return sp
 
 
+# ── Save/Load: soil_profile_groups ────────────────────────────
+
+def _save_soil_profile_group(group) -> dict:
+    """Save a SoilProfileGroup as metadata dict (profiles saved separately)."""
+    return {
+        "uid": group.uid,
+        "name": group.name,
+        "custom_name": group.custom_name,
+        "subplot_key": group.subplot_key,
+        "depth_max_display": group.depth_max_display,
+        "group_color": group.group_color,
+        "group_alpha": group.group_alpha,
+        "group_line_width": group.group_line_width,
+        "filepath": group.filepath,
+        "profile_uids": [p.uid for p in group.profiles],
+        "stats_property": group.stats_property,
+        "show_median": group.show_median,
+        "median_color": group.median_color,
+        "median_line_width": group.median_line_width,
+        "show_percentile": group.show_percentile,
+        "percentile_color": group.percentile_color,
+        "percentile_alpha": group.percentile_alpha,
+        "show_individual": group.show_individual,
+    }
+
+
+def _load_soil_profile_group(meta: dict, soil_profiles: list):
+    """Reconstruct a SoilProfileGroup from metadata, linking to loaded profiles."""
+    from geo_figure.core.models import SoilProfileGroup
+
+    uid_map = {sp.uid: sp for sp in soil_profiles}
+    profile_uids = meta.get("profile_uids", [])
+    profiles = [uid_map[u] for u in profile_uids if u in uid_map]
+
+    group = SoilProfileGroup(
+        uid=meta.get("uid", ""),
+        name=meta.get("name", "Profile Group"),
+        custom_name=meta.get("custom_name", ""),
+        profiles=profiles,
+        subplot_key=meta.get("subplot_key", "main"),
+        depth_max_display=meta.get("depth_max_display", 0.0),
+        group_color=meta.get("group_color"),
+        group_alpha=meta.get("group_alpha", 80),
+        group_line_width=meta.get("group_line_width", 0.5),
+        filepath=meta.get("filepath"),
+        stats_property=meta.get("stats_property", "vs"),
+        show_median=meta.get("show_median", True),
+        median_color=meta.get("median_color", "#D32F2F"),
+        median_line_width=meta.get("median_line_width", 2.5),
+        show_percentile=meta.get("show_percentile", True),
+        percentile_color=meta.get("percentile_color", "#E57373"),
+        percentile_alpha=meta.get("percentile_alpha", 80),
+        show_individual=meta.get("show_individual", True),
+    )
+    return group
+
+
 # ── Top-level load ────────────────────────────────────────────
 
 def load_sheet(sheet_path: str) -> Tuple[str, FigureState, CanvasConfig]:
@@ -559,6 +625,16 @@ def load_sheet(sheet_path: str) -> Tuple[str, FigureState, CanvasConfig]:
         except Exception:
             pass
 
+    # Reconstruct groups (linking to loaded profiles by uid)
+    soil_profile_groups = []
+    for gm in manifest.get("soil_profile_groups", []):
+        try:
+            soil_profile_groups.append(
+                _load_soil_profile_group(gm, soil_profiles)
+            )
+        except Exception:
+            pass
+
     figure_state = FigureState(
         layout_mode=layout.get("layout_mode", "combined"),
         grid_rows=layout.get("grid_rows", 1),
@@ -568,10 +644,12 @@ def load_sheet(sheet_path: str) -> Tuple[str, FigureState, CanvasConfig]:
         link_x=layout.get("link_x", False),
         subplot_names=layout.get("subplot_names", {}),
         subplot_types=layout.get("subplot_types", {}),
+        soil_profile_sections=layout.get("soil_profile_sections", {}),
         curves=curves,
         ensembles=ensembles,
         vs_profiles=vs_profiles,
         soil_profiles=soil_profiles,
+        soil_profile_groups=soil_profile_groups,
         theme=display.get("theme", "light"),
         velocity_unit=display.get("velocity_unit", "metric"),
     )

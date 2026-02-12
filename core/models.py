@@ -463,6 +463,24 @@ class SoilProfileGroup:
     group_line_width: float = 0.5
     filepath: Optional[str] = None
 
+    # Statistics (computed on demand via compute_group_statistics)
+    depth_grid: Optional[np.ndarray] = field(default=None, repr=False)
+    median_values: Optional[np.ndarray] = field(default=None, repr=False)
+    p05_values: Optional[np.ndarray] = field(default=None, repr=False)
+    p95_values: Optional[np.ndarray] = field(default=None, repr=False)
+    stats_property: str = "vs"   # which property the stats are computed for
+
+    # Display layers for statistics
+    show_median: bool = True
+    median_color: str = "#D32F2F"
+    median_line_width: float = 2.5
+
+    show_percentile: bool = True
+    percentile_color: str = "#E57373"
+    percentile_alpha: int = 80  # 0-255
+
+    show_individual: bool = True
+
     @property
     def display_name(self) -> str:
         return self.custom_name if self.custom_name else self.name
@@ -470,6 +488,10 @@ class SoilProfileGroup:
     @property
     def has_data(self) -> bool:
         return len(self.profiles) > 0 and any(p.has_data for p in self.profiles)
+
+    @property
+    def has_statistics(self) -> bool:
+        return self.depth_grid is not None and self.median_values is not None
 
 
 @dataclass
@@ -486,6 +508,7 @@ class FigureState:
     link_x: bool = False
     subplot_names: Dict[str, str] = field(default_factory=dict)
     subplot_types: Dict[str, str] = field(default_factory=dict)  # key -> "dc" or "vs_profile"
+    soil_profile_sections: Dict[str, list] = field(default_factory=dict)  # key -> ["vs","vp",...]
 
     # Data (references to live objects; renderer iterates these)
     curves: List[CurveData] = field(default_factory=list)

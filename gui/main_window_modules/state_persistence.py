@@ -94,6 +94,7 @@ class StatePersistenceMixin:
         ensembles = list(sd.get('ensembles', {}).values())
         vs_profiles = list(sd.get('vs_profiles', {}).values())
         soil_profiles = list(sd.get('soil_profiles', {}).values())
+        soil_profile_groups = list(sd.get('soil_profile_groups', {}).values())
         return FigureState(
             layout_mode=cfg["layout_mode"],
             grid_rows=cfg["grid_rows"],
@@ -103,10 +104,12 @@ class StatePersistenceMixin:
             link_x=cfg["link_x"],
             subplot_names=cfg["subplot_names"],
             subplot_types=cfg.get("subplot_types", {}),
+            soil_profile_sections=cfg.get("soil_profile_sections", {}),
             curves=curves,
             ensembles=ensembles,
             vs_profiles=vs_profiles,
             soil_profiles=soil_profiles,
+            soil_profile_groups=soil_profile_groups,
             theme=theme,
             velocity_unit=vel_unit,
         )
@@ -130,12 +133,18 @@ class StatePersistenceMixin:
             link_x=cfg["link_x"],
             subplot_names=cfg["subplot_names"],
             subplot_types=cfg.get("subplot_types", {}),
+            soil_profile_sections=cfg.get("soil_profile_sections", {}),
             curves=list(self._curves.values()),
             ensembles=list(self._ensembles.values()),
             vs_profiles=list(self._vs_profiles.values()),
             soil_profiles=list(
                 self._sheet_data.get(self._current_sheet_idx, {}).get(
                     'soil_profiles', {}
+                ).values()
+            ),
+            soil_profile_groups=list(
+                self._sheet_data.get(self._current_sheet_idx, {}).get(
+                    'soil_profile_groups', {}
                 ).values()
             ),
             theme=theme,
@@ -304,6 +313,7 @@ class StatePersistenceMixin:
         # Apply layout
         canvas._subplot_names = dict(fig_state.subplot_names)
         canvas._subplot_types = dict(fig_state.subplot_types)
+        canvas._soil_profile_sections = dict(fig_state.soil_profile_sections)
         canvas._link_y = fig_state.link_y
         canvas._link_x = fig_state.link_x
         if fig_state.layout_mode == "grid":
@@ -336,6 +346,13 @@ class StatePersistenceMixin:
         for sp in getattr(fig_state, 'soil_profiles', []) or []:
             self._sheet_data[new_idx]['soil_profiles'][sp.uid] = sp
             canvas.add_soil_profile(sp)
+
+        # Restore soil profile groups
+        for grp in getattr(fig_state, 'soil_profile_groups', []) or []:
+            self._sheet_data[new_idx].setdefault(
+                'soil_profile_groups', {}
+            )[grp.uid] = grp
+            self.curve_tree.add_soil_profile_group(grp)
 
         # Apply canvas display config (legend, axis ranges)
         canvas.apply_canvas_config(canvas_config)
