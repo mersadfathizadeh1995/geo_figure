@@ -478,27 +478,36 @@ class FileActionsMixin:
         canvas = self.sheet_tabs.get_current_canvas()
         target_key = canvas.active_subplot or "main"
 
-        # Auto-convert DC subplot to vs_profile if no DC data on it
-        subplot_type = canvas._subplot_types.get(target_key, "dc")
-        if subplot_type != "vs_profile":
-            has_dc = any(
-                c.subplot_key == target_key for c in self._curves.values()
-            ) or any(
-                e.subplot_key == target_key for e in self._ensembles.values()
+        # Auto-assign subplot type for soil profile loading
+        from geo_figure.core.subplot_types import (
+            UNSET, DC, VS_EXTRACT, PROFILE, SOIL_PROFILE,
+            subplot_accepts, auto_assign_type, rejection_message,
+            KIND_SOIL_PROFILE,
+        )
+        subplot_type = canvas._subplot_types.get(target_key, UNSET)
+        if not subplot_accepts(subplot_type, KIND_SOIL_PROFILE):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "Incompatible Subplot",
+                rejection_message(subplot_type, KIND_SOIL_PROFILE),
             )
-            if not has_dc:
-                canvas.set_subplot_type(target_key, "vs_profile")
-                self._rebuild_tree()
-                target_key = canvas.active_subplot or target_key
+            return
+        new_type = auto_assign_type(subplot_type, KIND_SOIL_PROFILE)
+        # Multi-property side-by-side requires SOIL_PROFILE type
+        if prop_mode == "multi" and len(selected_props) > 1:
+            new_type = SOIL_PROFILE
+        if new_type != subplot_type:
+            canvas.set_subplot_type(target_key, new_type)
+            self._rebuild_tree()
 
         # Handle split mode: use user-chosen subplot targets
         prop_labels = {"vs": "Vs", "vp": "Vp", "density": "Density"}
         prop_targets = {}
         if prop_mode == "split" and len(selected_props) > 1:
             prop_targets = user_targets
-            # Ensure target subplots are vs_profile type and labelled
+            # Ensure target subplots are profile type and labelled
             for prop, key in prop_targets.items():
-                canvas.set_subplot_type(key, "vs_profile")
+                canvas.set_subplot_type(key, PROFILE)
                 canvas.rename_subplot(key, prop_labels.get(prop, prop))
         else:
             for prop in selected_props:
@@ -523,8 +532,9 @@ class FileActionsMixin:
                 # Register multi-property sections on the canvas
                 if target_key not in canvas._soil_profile_sections:
                     canvas.set_soil_profile_sections(target_key, selected_props)
-                all_clones = []
+                # Group per property when grouping is requested
                 for prop in selected_props:
+                    clones = []
                     for prof in profiles:
                         clone = copy.copy(prof)
                         clone.uid = f"{prof.uid}_{prop}"
@@ -536,10 +546,16 @@ class FileActionsMixin:
                             f"{prof.custom_name or prof.name} "
                             f"({prop_labels.get(prop, prop)})"
                         )
-                        all_clones.append(clone)
-                self._add_profiles_to_canvas(
-                    all_clones, canvas, group_multi, filepath
-                )
+                        clones.append(clone)
+                    group_name = (
+                        f"{Path(filepath).stem} ({prop_labels.get(prop, prop)})"
+                        if group_multi and len(profiles) > 1
+                        else None
+                    )
+                    self._add_profiles_to_canvas(
+                        clones, canvas, group_multi, filepath,
+                        group_name=group_name,
+                    )
 
             elif prop_mode == "split":
                 for prop in selected_props:
@@ -563,13 +579,14 @@ class FileActionsMixin:
 
         canvas.auto_range()
 
-    def _add_profiles_to_canvas(self, profiles, canvas, group_multi, filepath):
+    def _add_profiles_to_canvas(self, profiles, canvas, group_multi, filepath,
+                                group_name=None):
         """Add profiles to canvas, optionally grouping them."""
         from geo_figure.core.models import SoilProfileGroup
 
         if len(profiles) > 1 and group_multi:
             group = SoilProfileGroup(
-                name=Path(filepath).stem,
+                name=group_name or Path(filepath).stem,
                 profiles=profiles,
                 subplot_key=profiles[0].subplot_key,
                 filepath=filepath,

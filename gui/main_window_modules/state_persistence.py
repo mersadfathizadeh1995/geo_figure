@@ -347,12 +347,11 @@ class StatePersistenceMixin:
             self._sheet_data[new_idx]['soil_profiles'][sp.uid] = sp
             canvas.add_soil_profile(sp)
 
-        # Restore soil profile groups
+        # Restore soil profile groups (tree items added by _rebuild_tree below)
         for grp in getattr(fig_state, 'soil_profile_groups', []) or []:
             self._sheet_data[new_idx].setdefault(
                 'soil_profile_groups', {}
             )[grp.uid] = grp
-            self.curve_tree.add_soil_profile_group(grp)
 
         # Apply canvas display config (legend, axis ranges)
         canvas.apply_canvas_config(canvas_config)

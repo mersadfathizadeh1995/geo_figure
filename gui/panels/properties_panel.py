@@ -178,14 +178,39 @@ class PropertiesPanel(
         self.sp_info_group.setVisible(True)
         self.sp_style_group.setVisible(True)
         self.sp_stats_group.setVisible(False)
+        self.sp_palette_group.setVisible(False)
 
         self._populate_soil_profile(profile)
+        self._updating = False
 
-        # Show group stats section if this profile belongs to a group with multiple profiles
-        if group is not None and len(group.profiles) > 1:
-            self.show_soil_profile_group(group.uid, group)
+    def show_soil_profile_group_only(self, group_uid: str, group):
+        """Show only the group statistics panel (when group root is selected)."""
+        self._updating = True
+        self._current_uid = None
+        self._current_curve = None
+        self._current_ensemble = None
+        self._current_profile = None
+        self._current_soil_profile = None
+
+        self.empty_label.setVisible(False)
+        self.info_group.setVisible(False)
+        self.style_group.setVisible(False)
+        self.proc_group.setVisible(False)
+        self.ens_group.setVisible(False)
+        self.ens_style_group.setVisible(False)
+        self.vs_prof_group.setVisible(False)
+        self.vs_disp_group.setVisible(False)
+        self.vs_layer_group.setVisible(False)
+        self.sp_info_group.setVisible(False)
+        self.sp_style_group.setVisible(False)
 
         self._updating = False
+        if len(group.profiles) > 1:
+            self.show_soil_profile_group(group_uid, group)
+        else:
+            self.sp_stats_group.setVisible(False)
+            self.sp_palette_group.setVisible(False)
+            self._current_group_uid = None
 
     def clear(self):
         """Clear the panel."""
@@ -207,8 +232,7 @@ class PropertiesPanel(
         self.sp_info_group.setVisible(False)
         self.sp_style_group.setVisible(False)
         self.sp_stats_group.setVisible(False)
-
-    # ── Emit helpers ─────────────────────────────────────────────
+        self.sp_palette_group.setVisible(False)
 
     def _emit_update(self):
         if self._current_uid and self._current_curve:
@@ -219,6 +243,7 @@ class PropertiesPanel(
     vs_profile_updated = Signal(str, object)  # uid, VsProfileData
     soil_profile_updated = Signal(str, object)  # uid, SoilProfile
     group_stats_requested = Signal(str)  # group uid
+    group_palette_applied = Signal(str, list)  # group uid, list of (profile_uid, color)
 
     def _build_vs_profile_info(self, parent_layout):
         """Build the Vs profile info + display settings + layer style sections."""
@@ -523,6 +548,11 @@ class PropertiesPanel(
         self.sp_show_median_check.toggled.connect(self._on_sp_stats_toggled)
         stats_form.addRow(self.sp_show_median_check)
 
+        self.sp_median_name_edit = QLineEdit("Median")
+        self.sp_median_name_edit.setPlaceholderText("Median")
+        self.sp_median_name_edit.editingFinished.connect(self._on_sp_stats_toggled)
+        stats_form.addRow("Label:", self.sp_median_name_edit)
+
         med_row = QHBoxLayout()
         med_row.addWidget(QLabel("Color:"))
         self.sp_median_color_btn = QPushButton()
@@ -547,6 +577,11 @@ class PropertiesPanel(
         self.sp_show_percentile_check.toggled.connect(self._on_sp_stats_toggled)
         stats_form.addRow(self.sp_show_percentile_check)
 
+        self.sp_pct_name_edit = QLineEdit("5-95 Percentile")
+        self.sp_pct_name_edit.setPlaceholderText("5-95 Percentile")
+        self.sp_pct_name_edit.editingFinished.connect(self._on_sp_stats_toggled)
+        stats_form.addRow("Label:", self.sp_pct_name_edit)
+
         pct_row = QHBoxLayout()
         pct_row.addWidget(QLabel("Color:"))
         self.sp_pct_color_btn = QPushButton()
@@ -565,7 +600,26 @@ class PropertiesPanel(
         self.sp_pct_alpha_spin.valueChanged.connect(self._on_sp_stats_toggled)
         stats_form.addRow("Band Opacity:", self.sp_pct_alpha_spin)
 
+        # -- Color palette for profiles --
+        from PySide6.QtWidgets import QComboBox
+        self.sp_palette_group, palette_content, palette_form = self._make_section(
+            "Profile Colors", expanded=False,
+        )
+        self.sp_palette_group.setVisible(False)
+
+        self.sp_palette_combo = QComboBox()
+        self.sp_palette_combo.addItems([
+            "Rainbow", "Blues", "Greens", "Reds",
+            "Oranges", "Purples", "Greys",
+        ])
+        palette_form.addRow("Palette:", self.sp_palette_combo)
+
+        self.sp_apply_palette_btn = QPushButton("Apply Palette")
+        self.sp_apply_palette_btn.clicked.connect(self._on_apply_palette)
+        palette_form.addRow(self.sp_apply_palette_btn)
+
         parent_layout.addWidget(self.sp_stats_group)
+        parent_layout.addWidget(self.sp_palette_group)
 
     def _populate_soil_profile(self, profile: SoilProfile):
         """Fill soil profile info and style fields."""
@@ -726,17 +780,22 @@ class PropertiesPanel(
         """Show properties for a SoilProfileGroup (statistics controls)."""
         self._current_group_uid = uid
         self.sp_stats_group.setVisible(True)
+        self.sp_palette_group.setVisible(True)
         if group.has_statistics:
             self.sp_stats_status.setText(
                 f"Computed ({len(group.depth_grid)} depth points)"
             )
+            self.sp_compute_stats_btn.setText("Recompute Statistics")
         else:
             self.sp_stats_status.setText("Not computed")
+            self.sp_compute_stats_btn.setText("Compute Statistics")
         self._updating = True
         self.sp_show_median_check.setChecked(group.show_median)
         self.sp_show_percentile_check.setChecked(group.show_percentile)
         self.sp_show_individual_check.setChecked(group.show_individual)
         self.sp_median_width_spin.setValue(group.median_line_width)
+        self.sp_median_name_edit.setText(group.median_label)
+        self.sp_pct_name_edit.setText(group.percentile_label)
         self._update_stats_color_btn(
             self.sp_median_color_btn, self.sp_median_color_hex,
             group.median_color,
@@ -751,4 +810,12 @@ class PropertiesPanel(
     def hide_group_stats(self):
         """Hide the group stats section."""
         self.sp_stats_group.setVisible(False)
+        self.sp_palette_group.setVisible(False)
         self._current_group_uid = None
+
+    def _on_apply_palette(self):
+        """Generate colors from selected palette and emit assignment."""
+        if not self._current_group_uid:
+            return
+        palette_name = self.sp_palette_combo.currentText()
+        self.group_palette_applied.emit(self._current_group_uid, [palette_name])

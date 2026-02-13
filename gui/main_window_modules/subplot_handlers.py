@@ -1,5 +1,28 @@
 """Subplot management: move, rename, activate, layout changes."""
 from geo_figure.core.models import WaveType
+from geo_figure.core.subplot_types import (
+    subplot_accepts, auto_assign_type, rejection_message,
+    KIND_CURVE, KIND_ENSEMBLE, KIND_VS_PROFILE, KIND_SOIL_PROFILE,
+    UNSET,
+)
+
+
+def _validate_move(self, new_key: str, data_kind: str) -> bool:
+    """Check if data_kind can be placed on new_key. Shows error if not."""
+    canvas = self.sheet_tabs.get_current_canvas()
+    stype = canvas._subplot_types.get(new_key, UNSET)
+    if not subplot_accepts(stype, data_kind):
+        from PySide6.QtWidgets import QMessageBox
+        QMessageBox.warning(
+            self, "Incompatible Subplot",
+            rejection_message(stype, data_kind),
+        )
+        return False
+    new_type = auto_assign_type(stype, data_kind)
+    if new_type != stype:
+        canvas.set_subplot_type(new_key, new_type)
+        self._rebuild_tree()
+    return True
 
 
 class SubplotHandlersMixin:
@@ -13,13 +36,13 @@ class SubplotHandlersMixin:
         old_key = curve.subplot_key
         if old_key == new_key:
             return
+        if not _validate_move(self, new_key, KIND_CURVE):
+            return
         curve.subplot_key = new_key
-        # Re-plot: remove from old subplot, add to new
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.remove_curve(uid)
         canvas.add_curve(curve)
         canvas.auto_range()
-        # Rebuild tree (block signals to prevent visibility toggle during removal)
         self.curve_tree.tree.blockSignals(True)
         self.curve_tree.remove_curve(uid)
         self.curve_tree.add_curve(curve)
@@ -41,12 +64,13 @@ class SubplotHandlersMixin:
             return
         if ens.subplot_key == new_key:
             return
+        if not _validate_move(self, new_key, KIND_ENSEMBLE):
+            return
         ens.subplot_key = new_key
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.remove_ensemble(uid)
         canvas.add_ensemble(ens)
         canvas.auto_range()
-        # Rebuild tree items (block signals to avoid toggle side-effects)
         self.curve_tree.tree.blockSignals(True)
         self.curve_tree.remove_ensemble(uid)
         self.curve_tree.add_ensemble(ens)
@@ -61,6 +85,8 @@ class SubplotHandlersMixin:
         if not prof:
             return
         if prof.subplot_key == new_key:
+            return
+        if not _validate_move(self, new_key, KIND_VS_PROFILE):
             return
         prof.subplot_key = new_key
         canvas = self.sheet_tabs.get_current_canvas()
@@ -77,6 +103,8 @@ class SubplotHandlersMixin:
 
     def _on_soil_profile_subplot_changed(self, uid: str, new_key: str):
         """Move a soil profile (or group) to a different subplot."""
+        if not _validate_move(self, new_key, KIND_SOIL_PROFILE):
+            return
         sd = self._sheet_data.get(self._current_sheet_idx, {})
         canvas = self.sheet_tabs.get_current_canvas()
 
@@ -147,6 +175,11 @@ class SubplotHandlersMixin:
         self._rebuild_tree()
         self.log_panel.log_info(f"Renamed subplot to '{new_name}'")
 
+    def _on_subplot_clear_from_tree(self, key: str):
+        """Clear data from a subplot via data panel context menu."""
+        canvas = self.sheet_tabs.get_current_canvas()
+        canvas.clear_subplot(key)
+
     def _on_layout_structure_changed(self, subplot_info: list):
         """Canvas layout changed -- migrate curves and update tree."""
         valid_keys = {k for k, _ in subplot_info}
@@ -181,9 +214,11 @@ class SubplotHandlersMixin:
         ratios = list(canvas._grid_col_ratios)
         self.sheet_panel.set_grid_col_ratios(cols, ratios)
 
-        # Show Vs Profile Layout if any cell is vs_profile
+        # Show Vs Profile Layout if any cell is depth-based
+        from geo_figure.core.subplot_types import VS_EXTRACT, PROFILE, SOIL_PROFILE
         has_vs = any(
-            t == "vs_profile" for t in canvas._subplot_types.values()
+            t in (VS_EXTRACT, PROFILE, SOIL_PROFILE)
+            for t in canvas._subplot_types.values()
         ) or layout_mode == "vs_profile"
         self.sheet_panel.set_vs_visible(has_vs)
         if has_vs:

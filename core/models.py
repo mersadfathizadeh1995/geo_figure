@@ -225,6 +225,45 @@ CURVE_COLORS = [
 ]
 
 
+def generate_palette(name: str, count: int) -> List[str]:
+    """Generate *count* hex colors from a named palette.
+
+    Available palettes: Rainbow, Blues, Greens, Reds, Oranges, Purples, Greys.
+    For single-hue palettes, colors are distributed from light to dark.
+    """
+    if count <= 0:
+        return []
+
+    if name == "Rainbow":
+        return [CURVE_COLORS[i % len(CURVE_COLORS)] for i in range(count)]
+
+    # Single-hue ramps: (lightest, darkest) in HSV-style hex pairs
+    hue_ranges = {
+        "Blues":   [(200, 0.25, 0.95), (210, 0.85, 0.55)],
+        "Greens":  [(120, 0.20, 0.90), (140, 0.75, 0.40)],
+        "Reds":    [(0, 0.25, 0.95), (5, 0.80, 0.55)],
+        "Oranges": [(30, 0.30, 0.95), (25, 0.85, 0.55)],
+        "Purples": [(280, 0.20, 0.92), (270, 0.70, 0.45)],
+        "Greys":   [(0, 0.0, 0.85), (0, 0.0, 0.30)],
+    }
+    rng = hue_ranges.get(name, hue_ranges["Blues"])
+    colors = []
+    for i in range(count):
+        t = i / max(count - 1, 1)
+        h = rng[0][0] + t * (rng[1][0] - rng[0][0])
+        s = rng[0][1] + t * (rng[1][1] - rng[0][1])
+        v = rng[0][2] + t * (rng[1][2] - rng[0][2])
+        colors.append(_hsv_to_hex(h, s, v))
+    return colors
+
+
+def _hsv_to_hex(h: float, s: float, v: float) -> str:
+    """Convert HSV (h in degrees, s/v in 0-1) to hex color string."""
+    import colorsys
+    r, g, b = colorsys.hsv_to_rgb(h / 360.0, s, v)
+    return f"#{int(r*255):02X}{int(g*255):02X}{int(b*255):02X}"
+
+
 @dataclass
 class VsProfileData:
     """Vs (or Vp/Rho) depth-velocity profile ensemble with statistics."""
@@ -474,10 +513,12 @@ class SoilProfileGroup:
     show_median: bool = True
     median_color: str = "#D32F2F"
     median_line_width: float = 2.5
+    median_label: str = "Median"
 
     show_percentile: bool = True
     percentile_color: str = "#E57373"
     percentile_alpha: int = 80  # 0-255
+    percentile_label: str = "5-95 Percentile"
 
     show_individual: bool = True
 
@@ -507,7 +548,7 @@ class FigureState:
     link_y: bool = False
     link_x: bool = False
     subplot_names: Dict[str, str] = field(default_factory=dict)
-    subplot_types: Dict[str, str] = field(default_factory=dict)  # key -> "dc" or "vs_profile"
+    subplot_types: Dict[str, str] = field(default_factory=dict)  # key -> subplot type
     soil_profile_sections: Dict[str, list] = field(default_factory=dict)  # key -> ["vs","vp",...]
 
     # Data (references to live objects; renderer iterates these)

@@ -101,18 +101,58 @@ class LayersPanel(QWidget):
 
             # Soil Profiles in this subplot
             soil_profs = getattr(state, "soil_profiles", []) or []
-            for sp in soil_profs:
-                if not self._vs_matches(sp.subplot_key, sp_key, sp_keys):
-                    continue
-                self._add_soil_profile_item(sp_item, sp)
+            sections = getattr(state, 'soil_profile_sections', {}) or {}
+            cell_sections = sections.get(sp_key)
+
+            if cell_sections and len(cell_sections) > 1:
+                # Multi-section: group soil profiles by render_property
+                _SEC_NAMES = {"vs": "Vs", "vp": "Vp", "density": "Density"}
+                for prop in cell_sections:
+                    sec_node = QTreeWidgetItem(sp_item)
+                    sec_node.setText(0, _SEC_NAMES.get(prop, prop))
+                    sec_node.setExpanded(True)
+                    sec_font = sec_node.font(0)
+                    sec_font.setItalic(True)
+                    sec_node.setFont(0, sec_font)
+                    for sp in soil_profs:
+                        if not self._vs_matches(sp.subplot_key, sp_key,
+                                                sp_keys):
+                            continue
+                        if getattr(sp, "render_property", "vs") == prop:
+                            self._add_soil_profile_item(sec_node, sp)
+            else:
+                for sp in soil_profs:
+                    if not self._vs_matches(sp.subplot_key, sp_key, sp_keys):
+                        continue
+                    self._add_soil_profile_item(sp_item, sp)
 
             # Soil Profile Groups (statistics layers)
             soil_groups = getattr(state, "soil_profile_groups", []) or []
-            for grp in soil_groups:
-                if not self._vs_matches(grp.subplot_key, sp_key, sp_keys):
-                    continue
-                if grp.has_statistics:
-                    self._add_group_stats_item(sp_item, grp)
+            if cell_sections and len(cell_sections) > 1:
+                # Group stats go under the matching section node
+                sec_nodes = {}
+                for idx in range(sp_item.childCount()):
+                    child = sp_item.child(idx)
+                    # Section nodes have italic font
+                    if child.font(0).italic():
+                        sec_nodes[child.text(0)] = child
+                _SEC_NAMES_REV = {"Vs": "vs", "Vp": "vp", "Density": "density"}
+                for grp in soil_groups:
+                    if not self._vs_matches(grp.subplot_key, sp_key, sp_keys):
+                        continue
+                    if grp.has_statistics:
+                        grp_prop = getattr(grp, "stats_property", "vs")
+                        _SEC_NAMES = {"vs": "Vs", "vp": "Vp",
+                                      "density": "Density"}
+                        sec_label = _SEC_NAMES.get(grp_prop, grp_prop)
+                        parent_node = sec_nodes.get(sec_label, sp_item)
+                        self._add_group_stats_item(parent_node, grp)
+            else:
+                for grp in soil_groups:
+                    if not self._vs_matches(grp.subplot_key, sp_key, sp_keys):
+                        continue
+                    if grp.has_statistics:
+                        self._add_group_stats_item(sp_item, grp)
 
         self._tree.blockSignals(False)
 

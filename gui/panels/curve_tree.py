@@ -108,6 +108,7 @@ class CurveTreePanel(QWidget):
     soil_profile_visibility_changed = Signal(str, bool)  # uid, visible
     remove_soil_profile_requested = Signal(str)        # uid
     soil_profile_subplot_changed = Signal(str, str)    # uid, new_subplot_key
+    subplot_clear_requested = Signal(str)               # subplot key
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -171,7 +172,7 @@ class CurveTreePanel(QWidget):
             root.setFlags(flags)
             self._subplot_roots[key] = root
         self._active_subplot_key = ""
-        self._subplot_types: Dict[str, str] = {}  # key -> "dc" or "vs_profile"
+        self._subplot_types: Dict[str, str] = {}
         self.tree.blockSignals(False)
 
     def set_subplot_types(self, types: Dict[str, str]):
@@ -180,12 +181,13 @@ class CurveTreePanel(QWidget):
 
     def _on_add_clicked(self):
         """Route the Add button to DC or Vs loader based on active subplot type."""
+        from geo_figure.core.subplot_types import DC, UNSET
         key = self._active_subplot_key
-        stype = self._subplot_types.get(key, "dc")
-        if stype == "vs_profile":
-            self.add_vs_profile_requested.emit()
-        else:
+        stype = self._subplot_types.get(key, UNSET)
+        if stype in (DC, UNSET):
             self.add_curve_requested.emit()
+        else:
+            self.add_vs_profile_requested.emit()
 
     def add_curve(self, curve: CurveData):
         """Add a curve under its subplot group, with per-point items."""
@@ -608,6 +610,10 @@ class CurveTreePanel(QWidget):
             key = str(uid).replace(_SUBPLOT_PREFIX, "")
             rename_action = menu.addAction("Rename Subplot...")
             rename_action.triggered.connect(lambda: self._rename_subplot(key))
+            clear_action = menu.addAction("Clear Data")
+            clear_action.triggered.connect(
+                lambda: self.subplot_clear_requested.emit(key)
+            )
             menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
 
@@ -621,18 +627,10 @@ class CurveTreePanel(QWidget):
                 remove_action.triggered.connect(
                     lambda: self.remove_ensemble_requested.emit(ens_uid)
                 )
-                # "Move to" submenu for ensemble
-                if len(self._subplot_roots) > 1:
-                    move_menu = menu.addMenu("Move to")
-                    for key, root in self._subplot_roots.items():
-                        name = root.text(0)
-                        paren_idx = name.rfind(" (")
-                        name = name[:paren_idx] if paren_idx > 0 else name
-                        act = move_menu.addAction(name)
-                        act.triggered.connect(
-                            lambda checked, u=ens_uid, k=key:
-                                self.ensemble_subplot_changed.emit(u, k)
-                        )
+                self._build_move_submenu(
+                    menu, "ensemble", ens_uid,
+                    lambda u, k: self.ensemble_subplot_changed.emit(u, k),
+                )
             menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
 
@@ -645,6 +643,10 @@ class CurveTreePanel(QWidget):
                 remove_action.triggered.connect(
                     lambda: self.remove_vs_profile_requested.emit(prof_uid)
                 )
+                self._build_move_submenu(
+                    menu, "vs_profile", prof_uid,
+                    lambda u, k: self.vs_profile_subplot_changed.emit(u, k),
+                )
             menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
 
@@ -655,17 +657,10 @@ class CurveTreePanel(QWidget):
             remove_action.triggered.connect(
                 lambda: self.remove_soil_profile_requested.emit(sp_uid)
             )
-            if len(self._subplot_roots) > 1:
-                move_menu = menu.addMenu("Move to")
-                for key, root in self._subplot_roots.items():
-                    name = root.text(0)
-                    paren_idx = name.rfind(" (")
-                    name = name[:paren_idx] if paren_idx > 0 else name
-                    act = move_menu.addAction(name)
-                    act.triggered.connect(
-                        lambda checked, u=sp_uid, k=key:
-                            self.soil_profile_subplot_changed.emit(u, k)
-                    )
+            self._build_move_submenu(
+                menu, "soil_profile", sp_uid,
+                lambda u, k: self.soil_profile_subplot_changed.emit(u, k),
+            )
             menu.exec(self.tree.viewport().mapToGlobal(pos))
             return
 
@@ -675,17 +670,10 @@ class CurveTreePanel(QWidget):
             remove_action = menu.addAction("Remove")
             remove_action.triggered.connect(lambda: self.remove_curve_requested.emit(uid))
 
-            # "Move to" submenu if multiple subplots
-            if len(self._subplot_roots) > 1:
-                move_menu = menu.addMenu("Move to")
-                for key, root in self._subplot_roots.items():
-                    name = root.text(0)
-                    paren_idx = name.rfind(" (")
-                    name = name[:paren_idx] if paren_idx > 0 else name
-                    act = move_menu.addAction(name)
-                    act.triggered.connect(
-                        lambda checked, u=uid, k=key: self.curve_subplot_changed.emit(u, k)
-                    )
+            self._build_move_submenu(
+                menu, "curve", uid,
+                lambda u, k: self.curve_subplot_changed.emit(u, k),
+            )
 
             menu.addSeparator()
             check_all = menu.addAction("Check All Points")
@@ -697,6 +685,28 @@ class CurveTreePanel(QWidget):
             toggle.triggered.connect(lambda: self._toggle_point(item))
 
         menu.exec(self.tree.viewport().mapToGlobal(pos))
+
+    def _build_move_submenu(self, parent_menu, data_kind: str, uid: str, emit_fn):
+        """Build a filtered 'Move to' submenu showing only compatible subplots."""
+        from geo_figure.core.subplot_types import subplot_accepts, UNSET
+        if len(self._subplot_roots) < 2:
+            return
+        compatible = []
+        for key, root in self._subplot_roots.items():
+            stype = self._subplot_types.get(key, UNSET)
+            if subplot_accepts(stype, data_kind):
+                name = root.text(0)
+                paren_idx = name.rfind(" (")
+                name = name[:paren_idx] if paren_idx > 0 else name
+                compatible.append((key, name))
+        if not compatible:
+            return
+        move_menu = parent_menu.addMenu("Move to")
+        for key, name in compatible:
+            act = move_menu.addAction(name)
+            act.triggered.connect(
+                lambda checked, u=uid, k=key: emit_fn(u, k)
+            )
 
     def _rename_subplot(self, key: str):
         root = self._subplot_roots.get(key)

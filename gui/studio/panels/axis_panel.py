@@ -37,6 +37,9 @@ class AxisPanel(QWidget):
         self.subplot_combo = QComboBox()
         self.subplot_combo.currentIndexChanged.connect(self._on_subplot_changed)
         sel_form.addRow("Subplot:", self.subplot_combo)
+        self.title_edit = QLineEdit()
+        self.title_edit.setPlaceholderText("Subplot title (optional)")
+        sel_form.addRow("Title:", self.title_edit)
         layout.addWidget(sel_grp)
 
         # -- Limits --
@@ -213,6 +216,7 @@ class AxisPanel(QWidget):
                   self.freq_tick_combo):
             w.currentIndexChanged.connect(self.changed)
         self.freq_tick_custom.editingFinished.connect(self.changed)
+        self.title_edit.editingFinished.connect(self.changed)
 
         self._subplot_keys = []
         self._current_key = ""
@@ -303,6 +307,7 @@ class AxisPanel(QWidget):
             return
         acfg = self._settings.axis_for(key)
         self.blockSignals(True)
+        self.title_edit.setText(acfg.title)
         self.auto_x.setChecked(acfg.auto_x)
         self.auto_y.setChecked(acfg.auto_y)
         if acfg.x_min is not None:
@@ -354,6 +359,7 @@ class AxisPanel(QWidget):
 
     def write_to(self, acfg: AxisConfig):
         """Write current UI values into an AxisConfig."""
+        acfg.title = self.title_edit.text().strip()
         acfg.auto_x = self.auto_x.isChecked()
         acfg.auto_y = self.auto_y.isChecked()
         acfg.x_min = self.x_min.value()

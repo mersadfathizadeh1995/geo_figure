@@ -10,6 +10,9 @@ from .constants import (
     VEL_LABELS, LEGEND_ANCHORS,
 )
 from .log_freq_axis import LogFreqAxis
+from geo_figure.core.subplot_types import (
+    UNSET, DC, VS_EXTRACT, PROFILE, SOIL_PROFILE,
+)
 
 
 def build_layout(canvas):
@@ -43,7 +46,7 @@ def build_layout(canvas):
 
     canvas.layout_changed.emit(canvas.get_subplot_info())
     keys = list(canvas._plots.keys())
-    if keys:
+    if keys and (canvas._active_subplot not in canvas._plots):
         canvas._active_subplot = keys[0]
 
 
@@ -52,29 +55,36 @@ def build_layout(canvas):
 
 def _build_combined(canvas):
     name = canvas._subplot_names.get("main", "")
-    cell_type = canvas._subplot_types.get("main", "dc")
+    cell_type = canvas._subplot_types.get("main", UNSET)
     sections = canvas._soil_profile_sections.get("main")
 
-    if cell_type == "vs_profile" and sections and len(sections) > 1:
-        # Multi-property sub-sections
+    if cell_type == SOIL_PROFILE and sections and len(sections) > 1:
+        # Multi-property sub-sections (Vs + Vp + Density)
         sub = canvas.graphics_layout.addLayout(row=0, col=0)
         sub.setContentsMargins(0, 0, 0, 0)
         sub.layout.setSpacing(0)
         sub.setMinimumSize(0, 0)
         sub.setPreferredSize(0, 0)
         canvas._subplot_names.setdefault("main", "")
-        canvas._subplot_types["main"] = "vs_profile"
+        canvas._subplot_types["main"] = SOIL_PROFILE
         _build_section_cell(canvas, sub, "main", sections, name, None)
-    elif cell_type == "vs_profile":
-        # Build as Vs profile subplot (linear axes, inverted Y)
+    elif cell_type == VS_EXTRACT:
         p = canvas.graphics_layout.addPlot(row=0, col=0)
         if name:
             p.setTitle(name)
         canvas._plots["main"] = p
         canvas._subplot_names.setdefault("main", "")
-        canvas._subplot_types["main"] = "vs_profile"
+        canvas._subplot_types["main"] = VS_EXTRACT
         configure_vs_plot(canvas, p, "main")
-    else:
+    elif cell_type == PROFILE:
+        p = canvas.graphics_layout.addPlot(row=0, col=0)
+        if name:
+            p.setTitle(name)
+        canvas._plots["main"] = p
+        canvas._subplot_names.setdefault("main", "")
+        canvas._subplot_types["main"] = PROFILE
+        configure_profile_plot(canvas, p, "main")
+    elif cell_type == DC:
         p = canvas.graphics_layout.addPlot(
             row=0, col=0,
             axisItems={"bottom": LogFreqAxis(orientation="bottom")},
@@ -83,8 +93,17 @@ def _build_combined(canvas):
             p.setTitle(name)
         canvas._plots["main"] = p
         canvas._subplot_names.setdefault("main", "")
-        canvas._subplot_types["main"] = "dc"
+        canvas._subplot_types["main"] = DC
         configure_dc_plot(canvas, p, "main")
+    else:
+        # UNSET or unknown -- blank subplot
+        p = canvas.graphics_layout.addPlot(row=0, col=0)
+        if name:
+            p.setTitle(name)
+        canvas._plots["main"] = p
+        canvas._subplot_names.setdefault("main", "")
+        canvas._subplot_types.setdefault("main", UNSET)
+        configure_blank_plot(canvas, p, "main")
 
 
 def _build_split_wave(canvas):
@@ -104,8 +123,8 @@ def _build_split_wave(canvas):
     canvas._plots["love"] = p_love
     canvas._subplot_names.setdefault("rayleigh", "Rayleigh")
     canvas._subplot_names.setdefault("love", "Love")
-    canvas._subplot_types["rayleigh"] = "dc"
-    canvas._subplot_types["love"] = "dc"
+    canvas._subplot_types["rayleigh"] = DC
+    canvas._subplot_types["love"] = DC
     for key in ["rayleigh", "love"]:
         configure_dc_plot(canvas, canvas._plots[key], key)
     if canvas._link_y:
@@ -134,16 +153,15 @@ def _build_grid(canvas):
     for r in range(rows):
         for c in range(cols):
             key = f"cell_{r}_{c}"
-            cell_type = canvas._subplot_types.get(key, "dc")
+            cell_type = canvas._subplot_types.get(key, UNSET)
             default_name = f"Subplot ({r+1},{c+1})"
             name = canvas._subplot_names.get(key, default_name)
             canvas._subplot_names.setdefault(key, default_name)
-            canvas._subplot_types.setdefault(key, "dc")
+            canvas._subplot_types.setdefault(key, UNSET)
 
-            if cell_type == "vs_profile":
+            if cell_type == SOIL_PROFILE:
                 sections = canvas._soil_profile_sections.get(key)
                 if sections and len(sections) > 1:
-                    # Multi-property sub-sections
                     sub = canvas.graphics_layout.addLayout(row=r, col=c)
                     sub.setContentsMargins(0, 0, 0, 0)
                     sub.layout.setSpacing(0)
@@ -157,43 +175,63 @@ def _build_grid(canvas):
                     elif canvas._link_y and p is not None:
                         p.setYLink(first_vs)
                 else:
-                    # Check if Vs extraction profiles need a sigma column
-                    needs_sigma = key in canvas._vs_extraction_keys
-                    if needs_sigma:
-                        # Vs extraction: Vs + sigma side-by-side
-                        sub = canvas.graphics_layout.addLayout(row=r, col=c)
-                        sub.setContentsMargins(0, 0, 0, 0)
-                        sub.layout.setSpacing(0)
-                        sub.setMinimumSize(0, 0)
-                        sub.setPreferredSize(0, 0)
-                        total = vs_r + sig_r
-                        sub.layout.setColumnStretchFactor(
-                            0, round((vs_r / total) * 100))
-                        sub.layout.setColumnStretchFactor(
-                            1, round((sig_r / total) * 100))
-
-                        p = sub.addPlot(row=0, col=0, title=name)
-                        canvas._plots[key] = p
-                        configure_vs_plot(canvas, p, key)
-
-                        sig_key = f"{key}_sigma"
-                        p_sig = sub.addPlot(row=0, col=1)
-                        canvas._plots[sig_key] = p_sig
-                        configure_sigma_plot(canvas, p_sig, sig_key)
-                        p_sig.setYLink(p)
-                    else:
-                        # Soil profiles only: no sigma column needed
-                        p = canvas.graphics_layout.addPlot(
-                            row=r, col=c, title=name,
-                        )
-                        canvas._plots[key] = p
-                        configure_vs_plot(canvas, p, key)
-
+                    p = canvas.graphics_layout.addPlot(
+                        row=r, col=c, title=name,
+                    )
+                    canvas._plots[key] = p
+                    configure_profile_plot(canvas, p, key)
                     if first_vs is None:
                         first_vs = p
                     elif canvas._link_y:
                         p.setYLink(first_vs)
-            else:
+
+            elif cell_type == VS_EXTRACT:
+                needs_sigma = key in canvas._vs_extraction_keys
+                if needs_sigma:
+                    sub = canvas.graphics_layout.addLayout(row=r, col=c)
+                    sub.setContentsMargins(0, 0, 0, 0)
+                    sub.layout.setSpacing(0)
+                    sub.setMinimumSize(0, 0)
+                    sub.setPreferredSize(0, 0)
+                    total = vs_r + sig_r
+                    sub.layout.setColumnStretchFactor(
+                        0, round((vs_r / total) * 100))
+                    sub.layout.setColumnStretchFactor(
+                        1, round((sig_r / total) * 100))
+
+                    p = sub.addPlot(row=0, col=0, title=name)
+                    canvas._plots[key] = p
+                    configure_vs_plot(canvas, p, key)
+
+                    sig_key = f"{key}_sigma"
+                    p_sig = sub.addPlot(row=0, col=1)
+                    canvas._plots[sig_key] = p_sig
+                    configure_sigma_plot(canvas, p_sig, sig_key)
+                    p_sig.setYLink(p)
+                else:
+                    p = canvas.graphics_layout.addPlot(
+                        row=r, col=c, title=name,
+                    )
+                    canvas._plots[key] = p
+                    configure_vs_plot(canvas, p, key)
+
+                if first_vs is None:
+                    first_vs = p
+                elif canvas._link_y:
+                    p.setYLink(first_vs)
+
+            elif cell_type == PROFILE:
+                p = canvas.graphics_layout.addPlot(
+                    row=r, col=c, title=name,
+                )
+                canvas._plots[key] = p
+                configure_profile_plot(canvas, p, key)
+                if first_vs is None:
+                    first_vs = p
+                elif canvas._link_y:
+                    p.setYLink(first_vs)
+
+            elif cell_type == DC:
                 p = canvas.graphics_layout.addPlot(
                     row=r, col=c,
                     axisItems={"bottom": LogFreqAxis(orientation="bottom")},
@@ -210,13 +248,30 @@ def _build_grid(canvas):
                     if canvas._link_x:
                         p.setXLink(first_dc)
 
+            else:
+                # UNSET -- blank subplot
+                p = canvas.graphics_layout.addPlot(
+                    row=r, col=c, title=name,
+                )
+                canvas._plots[key] = p
+                configure_blank_plot(canvas, p, key)
+
+    # Normalize preferred widths so column stretch factors control sizing
+    outer_layout = canvas.graphics_layout.ci.layout
+    for r in range(rows):
+        for c in range(cols):
+            item = outer_layout.itemAt(r, c)
+            if item is not None:
+                item.setPreferredWidth(0)
+                item.setMinimumWidth(0)
+
 
 def _build_vs_profile(canvas):
     vs_name = canvas._subplot_names.get("vs_profile", "Vs Profile")
     sig_name = canvas._subplot_names.get("sigma_ln", "")
     canvas._subplot_names.setdefault("vs_profile", "Vs Profile")
     canvas._subplot_names.setdefault("sigma_ln", "")
-    canvas._subplot_types["vs_profile"] = "vs_profile"
+    canvas._subplot_types["vs_profile"] = VS_EXTRACT
     canvas._subplot_types["sigma_ln"] = "sigma_ln"
 
     p_vs = canvas.graphics_layout.addPlot(row=0, col=0, title=vs_name)
@@ -296,6 +351,44 @@ def configure_sigma_plot(canvas, plot: pg.PlotItem, subplot_key: str):
     plot.setXRange(0, 0.5, padding=0.05)
     # Remove title space to reduce overhead
     plot.setTitle("")
+    plot.vb.menu = build_context_menu(canvas, plot)
+    plot.scene().sigMouseClicked.connect(
+        lambda ev, p=plot: canvas._on_plot_clicked(ev, p)
+    )
+    _add_legend_to_plot(canvas, plot, subplot_key)
+
+
+def configure_blank_plot(canvas, plot: pg.PlotItem, subplot_key: str):
+    """Configure a blank (unset) subplot -- minimal axes, no labels."""
+    plot.setLabel("bottom", "")
+    plot.setLabel("left", "")
+    plot.showGrid(x=True, y=True, alpha=0.1)
+    for axis_name in ["bottom", "left"]:
+        axis = plot.getAxis(axis_name)
+        axis.enableAutoSIPrefix(False)
+        axis.setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+    plot.setMouseEnabled(x=True, y=True)
+    plot.enableAutoRange()
+    plot.vb.menu = build_context_menu(canvas, plot)
+    plot.scene().sigMouseClicked.connect(
+        lambda ev, p=plot: canvas._on_plot_clicked(ev, p)
+    )
+
+
+def configure_profile_plot(canvas, plot: pg.PlotItem, subplot_key: str):
+    """Configure a profile subplot: linear axes, inverted Y, no sigma pane."""
+    vel_unit = "ft/s" if canvas._velocity_unit == "imperial" else "m/s"
+    depth_unit = "ft" if canvas._velocity_unit == "imperial" else "m"
+    plot.setLabel("bottom", f"Vs ({vel_unit})")
+    plot.setLabel("left", f"Depth ({depth_unit})")
+    plot.showGrid(x=True, y=True, alpha=0.3)
+    plot.invertY(True)
+    for axis_name in ["bottom", "left"]:
+        axis = plot.getAxis(axis_name)
+        axis.enableAutoSIPrefix(False)
+        axis.setStyle(tickFont=pg.QtGui.QFont("Segoe UI", 9))
+    plot.setMouseEnabled(x=True, y=True)
+    plot.enableAutoRange()
     plot.vb.menu = build_context_menu(canvas, plot)
     plot.scene().sigMouseClicked.connect(
         lambda ev, p=plot: canvas._on_plot_clicked(ev, p)
@@ -400,6 +493,12 @@ def build_context_menu(canvas, plot: pg.PlotItem) -> QMenu:
     rename_action.triggered.connect(
         lambda: _rename_subplot_from_menu(canvas, plot)
     )
+
+    clear_action = menu.addAction("Clear Data")
+    clear_action.triggered.connect(
+        lambda: _clear_subplot_from_menu(canvas, plot)
+    )
+
     menu.addSeparator()
     menu.addAction("Export Canvas Image...", canvas._on_export_action)
     return menu
@@ -420,3 +519,18 @@ def _rename_subplot_from_menu(canvas, plot):
     )
     if ok and new_name.strip():
         canvas.rename_subplot(key, new_name.strip())
+
+
+def _clear_subplot_from_menu(canvas, plot):
+    """Clear all data from the clicked subplot."""
+    key = None
+    for k, p in canvas._plots.items():
+        if p is plot:
+            key = k
+            break
+    if key is None:
+        return
+    # Resolve section keys (e.g. cell_0_0_sp_vs -> cell_0_0)
+    if "_sp_" in key:
+        key = key.rsplit("_sp_", 1)[0]
+    canvas.clear_subplot(key)

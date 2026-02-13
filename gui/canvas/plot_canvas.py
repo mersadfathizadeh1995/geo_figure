@@ -31,6 +31,7 @@ class PlotCanvas(QWidget):
 
     curve_clicked = Signal(str)
     layout_changed = Signal(list)
+    subplot_cleared = Signal(str)  # emits subplot key
 
     # Expose legend anchors as class attr for backward compat
     _LEGEND_ANCHORS = LEGEND_ANCHORS
@@ -96,7 +97,10 @@ class PlotCanvas(QWidget):
         saved_curves = {uid: info["data"] for uid, info in self._curves.items()}
         saved_ensembles = {eid: info["data"] for eid, info in self._ensembles.items()}
         saved_profiles = {uid: info["data"] for uid, info in self._vs_profiles.items()}
-        saved_soil = {uid: info["data"] for uid, info in self._soil_profiles.items()}
+        saved_soil = {
+            uid: info["data"] for uid, info in self._soil_profiles.items()
+            if not uid.startswith("_grpstats_")
+        }
         # Expose which subplot keys have Vs extraction profiles for layout
         self._vs_extraction_keys = {
             p.subplot_key for p in saved_profiles.values()
@@ -128,6 +132,31 @@ class PlotCanvas(QWidget):
                 data = entry.get("data")
                 if data:
                     data.subplot_key = "main"
+        elif old_mode == LAYOUT_GRID and mode != LAYOUT_GRID:
+            # Migrate cell_0_0 data back to "main"
+            if "cell_0_0" in self._subplot_types:
+                self._subplot_types["main"] = self._subplot_types.pop("cell_0_0")
+            if "cell_0_0" in self._soil_profile_sections:
+                self._soil_profile_sections["main"] = (
+                    self._soil_profile_sections.pop("cell_0_0")
+                )
+            if "cell_0_0" in self._subplot_names:
+                self._subplot_names["main"] = self._subplot_names.pop("cell_0_0")
+            # Move all data from grid cells to "main"
+            for uid, entry in self._soil_profiles.items():
+                if uid.startswith("_grpstats_"):
+                    continue
+                data = entry.get("data")
+                if data:
+                    data.subplot_key = "main"
+            for uid, entry in self._curves.items():
+                data = entry.get("data")
+                if data:
+                    data.subplot_key = "main"
+            for eid, entry in self._ensembles.items():
+                data = entry.get("data")
+                if data:
+                    data.subplot_key = "main"
         self.rebuild()
 
     def set_grid(self, rows: int, cols: int):
@@ -137,10 +166,35 @@ class PlotCanvas(QWidget):
         self._layout_mode = LAYOUT_GRID
         self._grid_col_ratios = [1.0] * self._grid_cols
         if old_mode == LAYOUT_VS_PROFILE:
-            self._subplot_types["cell_0_0"] = "vs_profile"
+            from geo_figure.core.subplot_types import VS_EXTRACT
+            self._subplot_types["cell_0_0"] = VS_EXTRACT
             for uid, entry in self._vs_profiles.items():
                 data = entry.get("data")
                 if data:
+                    data.subplot_key = "cell_0_0"
+        elif old_mode != LAYOUT_GRID:
+            # Migrating from combined/split to grid: move "main" to "cell_0_0"
+            if "main" in self._subplot_types:
+                self._subplot_types["cell_0_0"] = self._subplot_types.pop("main")
+            if "main" in self._soil_profile_sections:
+                self._soil_profile_sections["cell_0_0"] = (
+                    self._soil_profile_sections.pop("main")
+                )
+            if "main" in self._subplot_names:
+                self._subplot_names["cell_0_0"] = self._subplot_names.pop("main")
+            for uid, entry in self._soil_profiles.items():
+                if uid.startswith("_grpstats_"):
+                    continue
+                data = entry.get("data")
+                if data and getattr(data, "subplot_key", "main") == "main":
+                    data.subplot_key = "cell_0_0"
+            for uid, entry in self._curves.items():
+                data = entry.get("data")
+                if data and getattr(data, "subplot_key", "main") == "main":
+                    data.subplot_key = "cell_0_0"
+            for eid, entry in self._ensembles.items():
+                data = entry.get("data")
+                if data and getattr(data, "subplot_key", "main") == "main":
                     data.subplot_key = "cell_0_0"
         self.rebuild()
 
@@ -163,6 +217,48 @@ class PlotCanvas(QWidget):
         else:
             self._soil_profile_sections.pop(key, None)
         self.rebuild()
+
+    def clear_subplot(self, key: str):
+        """Remove all data from a subplot and reset it to UNSET."""
+        from geo_figure.core.subplot_types import UNSET
+        # Collect UIDs to remove (match subplot_key or section keys)
+        section_keys = {key}
+        secs = self._soil_profile_sections.get(key)
+        if secs:
+            for prop in secs:
+                section_keys.add(f"{key}_sp_{prop}")
+
+        def _on_key(data):
+            sk = getattr(data, "subplot_key", None)
+            return sk in section_keys or sk == key
+
+        curve_uids = [u for u, e in self._curves.items()
+                      if _on_key(e["data"])]
+        ens_uids = [u for u, e in self._ensembles.items()
+                    if _on_key(e["data"])]
+        vs_uids = [u for u, e in self._vs_profiles.items()
+                   if _on_key(e["data"])]
+        sp_uids = [u for u, e in self._soil_profiles.items()
+                   if not u.startswith("_grpstats_") and _on_key(e["data"])]
+        grp_uids = [u for u in self._soil_profiles
+                    if u.startswith("_grpstats_")]
+
+        for uid in curve_uids:
+            self._curves.pop(uid, None)
+        for uid in ens_uids:
+            self._ensembles.pop(uid, None)
+        for uid in vs_uids:
+            self._vs_profiles.pop(uid, None)
+        for uid in sp_uids:
+            self._soil_profiles.pop(uid, None)
+        for uid in grp_uids:
+            self._soil_profiles.pop(uid, None)
+
+        self._subplot_types[key] = UNSET
+        self._soil_profile_sections.pop(key, None)
+        self._subplot_names[key] = ""
+        self.rebuild()
+        self.subplot_cleared.emit(key)
 
     def set_link_y(self, linked: bool):
         self._link_y = linked

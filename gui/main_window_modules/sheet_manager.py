@@ -60,8 +60,22 @@ class SheetManagerMixin:
         for uid, prof in self._vs_profiles.items():
             self.curve_tree.add_vs_profile(prof)
         sd = self._sheet_data.get(self._current_sheet_idx, {})
+
+        # Collect uids that belong to groups so they aren't added individually
+        grouped_uids = set()
+        for grp in sd.get('soil_profile_groups', {}).values():
+            for prof in grp.profiles:
+                grouped_uids.add(prof.uid)
+
+        # Add ungrouped soil profiles individually
         for uid, sp in sd.get('soil_profiles', {}).items():
-            self.curve_tree.add_soil_profile(sp)
+            if uid not in grouped_uids:
+                self.curve_tree.add_soil_profile(sp)
+
+        # Add groups (which render their children as nested items)
+        for grp in sd.get('soil_profile_groups', {}).values():
+            self.curve_tree.add_soil_profile_group(grp)
+
         self.properties.set_available_subplots(subplot_info)
 
     def _on_sheet_changed(self, index: int):
@@ -97,8 +111,10 @@ class SheetManagerMixin:
         cols = canvas._grid_cols if canvas.layout_mode == "grid" else 0
         self.sheet_panel.set_grid_col_ratios(cols, list(canvas._grid_col_ratios))
         # Sync Vs profile layout visibility
+        from geo_figure.core.subplot_types import VS_EXTRACT, PROFILE, SOIL_PROFILE
         has_vs = any(
-            t == "vs_profile" for t in canvas._subplot_types.values()
+            t in (VS_EXTRACT, PROFILE, SOIL_PROFILE)
+            for t in canvas._subplot_types.values()
         ) or canvas.layout_mode == "vs_profile"
         self.sheet_panel.set_vs_visible(has_vs)
         if has_vs:
@@ -120,8 +136,13 @@ class SheetManagerMixin:
                 canvas.layout_changed.disconnect(self._on_layout_structure_changed)
             except (RuntimeError, TypeError):
                 pass
+            try:
+                canvas.subplot_cleared.disconnect(self._on_subplot_cleared)
+            except (RuntimeError, TypeError):
+                pass
         canvas.curve_clicked.connect(self._on_curve_selected)
         canvas.layout_changed.connect(self._on_layout_structure_changed)
+        canvas.subplot_cleared.connect(self._on_subplot_cleared)
 
     def _on_duplicate_sheet(self, source_index: int):
         """Duplicate a sheet with all its curves and ensembles."""

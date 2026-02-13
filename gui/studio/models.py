@@ -47,6 +47,7 @@ class TickConfig:
 @dataclass
 class AxisConfig:
     """Per-subplot axis configuration."""
+    title: str = ""
     auto_x: bool = True
     auto_y: bool = True
     x_min: Optional[float] = None
@@ -73,7 +74,7 @@ class LegendConfig:
     """Legend appearance and positioning."""
     show: bool = True
     location: str = "upper right"
-    placement: str = "inside"            # "inside", "outside_left", "outside_right", "outside_top", "outside_bottom"
+    placement: str = "inside"            # "inside", "outside_left", "outside_right", "outside_top", "outside_bottom", "adjacent"
     bbox_anchor: Optional[Tuple[float, float]] = None
     ncol: int = 1
     fontsize: Optional[float] = None     # None = use typography legend_size
@@ -83,6 +84,10 @@ class LegendConfig:
     title: str = ""
     markerscale: float = 1.0             # scale for legend markers/lines
     hidden_labels: Optional[List[str]] = None  # labels to hide from legend
+    adjacent_side: str = "right"         # "right", "left", "top", "bottom" -- used when placement=="adjacent"
+    adjacent_target: str = ""            # subplot key to attach legend to (default: self)
+    offset_x: float = 0.0               # horizontal nudge (axes fraction for inside/adjacent, figure fraction for outside)
+    offset_y: float = 0.0               # vertical nudge (axes fraction for inside/adjacent, figure fraction for outside)
 
 
 @dataclass
@@ -155,5 +160,9 @@ class StudioSettings:
                 ncol=g.ncol, fontsize=g.fontsize, frame_on=g.frame_on,
                 frame_alpha=g.frame_alpha, shadow=g.shadow, title=g.title,
                 markerscale=g.markerscale,
+                adjacent_side=getattr(g, 'adjacent_side', 'right'),
+                adjacent_target=getattr(g, 'adjacent_target', ''),
+                offset_x=getattr(g, 'offset_x', 0.0),
+                offset_y=getattr(g, 'offset_y', 0.0),
             )
         return self.legend_overrides[subplot_key]

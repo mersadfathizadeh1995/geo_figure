@@ -144,6 +144,9 @@ class MainWindow(
         self.curve_tree.point_visibility_changed.connect(self._on_point_visibility)
         self.curve_tree.curve_subplot_changed.connect(self._on_curve_subplot_changed)
         self.curve_tree.subplot_renamed.connect(self._on_subplot_renamed)
+        self.curve_tree.subplot_clear_requested.connect(
+            self._on_subplot_clear_from_tree
+        )
         self.curve_tree.ensemble_selected.connect(self._on_ensemble_selected)
         self.curve_tree.ensemble_layer_toggled.connect(self._on_ensemble_layer_toggled)
         self.curve_tree.remove_ensemble_requested.connect(self._on_remove_ensemble)
@@ -177,6 +180,7 @@ class MainWindow(
         self.properties.vs_profile_updated.connect(self._on_vs_profile_updated)
         self.properties.soil_profile_updated.connect(self._on_soil_profile_updated)
         self.properties.group_stats_requested.connect(self._on_group_stats_requested)
+        self.properties.group_palette_applied.connect(self._on_group_palette_applied)
 
         # Sheet panel signals
         self.sheet_panel.legend_changed.connect(self._on_legend_changed)
@@ -188,6 +192,7 @@ class MainWindow(
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.curve_clicked.connect(self._on_curve_selected)
         canvas.layout_changed.connect(self._on_layout_structure_changed)
+        canvas.subplot_cleared.connect(self._on_subplot_cleared)
 
         # Sheet tab change
         self.sheet_tabs.currentChanged.connect(self._on_sheet_changed)
@@ -198,18 +203,51 @@ class MainWindow(
 
     def _add_curve(self, curve: CurveData, canvas):
         """Add a curve to the data store, tree, and canvas."""
+        from geo_figure.core.subplot_types import (
+            subplot_accepts, auto_assign_type, rejection_message,
+            KIND_CURVE, UNSET,
+        )
         # Assign to the active subplot if the curve has default key
         if curve.subplot_key == "main" and "main" not in canvas._plots:
             curve.subplot_key = canvas.active_subplot
+        target_key = curve.subplot_key
+        stype = canvas._subplot_types.get(target_key, UNSET)
+        if not subplot_accepts(stype, KIND_CURVE):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "Incompatible Subplot",
+                rejection_message(stype, KIND_CURVE),
+            )
+            return
+        new_type = auto_assign_type(stype, KIND_CURVE)
+        if new_type != stype:
+            canvas.set_subplot_type(target_key, new_type)
+            self._rebuild_tree()
         self._curves[curve.uid] = curve
         self.curve_tree.add_curve(curve)
         canvas.add_curve(curve)
 
     def _add_soil_profile(self, profile, canvas):
         """Add a soil profile to the data store, tree, and canvas."""
-        from geo_figure.core.models import SoilProfile
+        from geo_figure.core.subplot_types import (
+            subplot_accepts, auto_assign_type, rejection_message,
+            KIND_SOIL_PROFILE, UNSET,
+        )
         if profile.subplot_key == "main" and "main" not in canvas._plots:
             profile.subplot_key = canvas.active_subplot or list(canvas._plots.keys())[0]
+        target_key = profile.subplot_key
+        stype = canvas._subplot_types.get(target_key, UNSET)
+        if not subplot_accepts(stype, KIND_SOIL_PROFILE):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "Incompatible Subplot",
+                rejection_message(stype, KIND_SOIL_PROFILE),
+            )
+            return
+        new_type = auto_assign_type(stype, KIND_SOIL_PROFILE)
+        if new_type != stype:
+            canvas.set_subplot_type(target_key, new_type)
+            self._rebuild_tree()
         sd = self._sheet_data.get(self._current_sheet_idx, {})
         sp_list = sd.setdefault("soil_profiles", {})
         sp_list[profile.uid] = profile

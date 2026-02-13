@@ -14,15 +14,25 @@ LEGEND_LOCATIONS = [
     "lower center", "upper center", "center", "best",
 ]
 
-PLACEMENT_OPTIONS = ["Inside", "Outside Left", "Outside Right", "Outside Top", "Outside Bottom"]
+PLACEMENT_OPTIONS = [
+    "Inside", "Outside Left", "Outside Right", "Outside Top", "Outside Bottom",
+    "Adjacent",
+]
 _PLACEMENT_MAP = {
     "Inside": "inside",
     "Outside Left": "outside_left",
     "Outside Right": "outside_right",
     "Outside Top": "outside_top",
     "Outside Bottom": "outside_bottom",
+    "Adjacent": "adjacent",
 }
 _PLACEMENT_REVERSE = {v: k for k, v in _PLACEMENT_MAP.items()}
+
+_ADJACENT_SIDES = ["Right", "Left", "Top", "Bottom"]
+_ADJACENT_SIDE_MAP = {
+    "Right": "right", "Left": "left", "Top": "top", "Bottom": "bottom",
+}
+_ADJACENT_SIDE_REVERSE = {v: k for k, v in _ADJACENT_SIDE_MAP.items()}
 
 
 class LegendPanel(QWidget):
@@ -89,6 +99,26 @@ class LegendPanel(QWidget):
         self.placement_combo.addItems(PLACEMENT_OPTIONS)
         form.addRow("Placement:", self.placement_combo)
 
+        # Adjacent-mode controls (visible only when placement == Adjacent)
+        self._adjacent_side_label = QLabel("Adjacent Side:")
+        self.adjacent_side_combo = QComboBox()
+        self.adjacent_side_combo.addItems(_ADJACENT_SIDES)
+        form.addRow(self._adjacent_side_label, self.adjacent_side_combo)
+
+        self._adjacent_target_label = QLabel("Attach To:")
+        self.adjacent_target_combo = QComboBox()
+        form.addRow(self._adjacent_target_label, self.adjacent_target_combo)
+
+        # Hide adjacent-only controls by default
+        self._adjacent_side_label.setVisible(False)
+        self.adjacent_side_combo.setVisible(False)
+        self._adjacent_target_label.setVisible(False)
+        self.adjacent_target_combo.setVisible(False)
+
+        self.placement_combo.currentTextChanged.connect(
+            self._toggle_adjacent_controls
+        )
+
         self.location_combo = QComboBox()
         self.location_combo.addItems(LEGEND_LOCATIONS)
         form.addRow("Position:", self.location_combo)
@@ -110,6 +140,24 @@ class LegendPanel(QWidget):
         self.markerscale_spin.setValue(1.0)
         self.markerscale_spin.setSingleStep(0.1)
         form.addRow("Marker Scale:", self.markerscale_spin)
+
+        self.offset_x_spin = QDoubleSpinBox()
+        self.offset_x_spin.setRange(-2.0, 2.0)
+        self.offset_x_spin.setValue(0.0)
+        self.offset_x_spin.setSingleStep(0.02)
+        self.offset_x_spin.setToolTip(
+            "Horizontal nudge (positive = rightward)"
+        )
+        form.addRow("H Offset:", self.offset_x_spin)
+
+        self.offset_y_spin = QDoubleSpinBox()
+        self.offset_y_spin.setRange(-2.0, 2.0)
+        self.offset_y_spin.setValue(0.0)
+        self.offset_y_spin.setSingleStep(0.02)
+        self.offset_y_spin.setToolTip(
+            "Vertical nudge (positive = upward)"
+        )
+        form.addRow("V Offset:", self.offset_y_spin)
 
         layout.addWidget(legend_sec)
 
@@ -165,8 +213,11 @@ class LegendPanel(QWidget):
             w.stateChanged.connect(self._on_value_changed)
         self.placement_combo.currentIndexChanged.connect(self._on_value_changed)
         self.location_combo.currentIndexChanged.connect(self._on_value_changed)
+        self.adjacent_side_combo.currentIndexChanged.connect(self._on_value_changed)
+        self.adjacent_target_combo.currentIndexChanged.connect(self._on_value_changed)
         for w in (self.ncol_spin, self.fontsize_spin, self.markerscale_spin,
-                  self.frame_alpha, self.legend_scale_spin):
+                  self.frame_alpha, self.legend_scale_spin,
+                  self.offset_x_spin, self.offset_y_spin):
             w.valueChanged.connect(self._on_value_changed)
 
         self._subplot_checks: list[tuple[str, QCheckBox]] = []
@@ -180,6 +231,7 @@ class LegendPanel(QWidget):
     def set_subplots(self, subplot_info: list, settings):
         """Populate subplot checkboxes and load first subplot's config."""
         self._settings = settings
+        self._subplot_info = list(subplot_info)
         self._updating = True
 
         # Clear old checkboxes
@@ -197,6 +249,14 @@ class LegendPanel(QWidget):
             cb.stateChanged.connect(self._on_check_toggled)
             self._check_container.addWidget(cb)
             self._subplot_checks.append((key, cb))
+
+        # Populate adjacent target combo
+        self.adjacent_target_combo.clear()
+        self.adjacent_target_combo.addItem("(self)", "")
+        for key, name in subplot_info:
+            self.adjacent_target_combo.addItem(
+                name if name else key, key
+            )
 
         self.legend_scale_spin.setValue(settings.legend_scale)
 
@@ -216,7 +276,9 @@ class LegendPanel(QWidget):
         Parameters
         ----------
         labels_per_subplot : dict
-            {subplot_key: [label_str, ...]} from renderer.collect_legend_labels()
+            {subplot_key: items} from renderer.collect_legend_labels().
+            items is either [label_str, ...] for regular subplots, or
+            [(section_name, [label_str, ...]), ...] for multi-section subplots.
         subplot_names : dict
             {subplot_key: display_name} for section headers
         """
@@ -237,24 +299,58 @@ class LegendPanel(QWidget):
             return
 
         self._updating = True
-        for key, labels in labels_per_subplot.items():
+        for key, items in labels_per_subplot.items():
             name = subplot_names.get(key, key)
-            # Subplot header
-            header = QLabel(f"  {name}")
-            header.setStyleSheet("font-weight: bold; color: #555; margin-top: 4px;")
-            self._items_layout.addWidget(header)
 
             lc = self._settings.legend_for(key) if self._settings else None
             hidden = set(lc.hidden_labels) if lc and lc.hidden_labels else set()
 
-            for label in labels:
-                cb = QCheckBox(label)
-                cb.setChecked(label not in hidden)
-                cb.setProperty("subplot_key", key)
-                cb.setProperty("label_text", label)
-                cb.stateChanged.connect(self._on_item_toggled)
-                self._items_layout.addWidget(cb)
-                self._item_checks.append((key, label, cb))
+            # Detect section-grouped format: list of (str, list) tuples
+            is_sectioned = (
+                items
+                and isinstance(items[0], tuple)
+                and len(items[0]) == 2
+                and isinstance(items[0][1], list)
+            )
+
+            if is_sectioned:
+                # Subplot header
+                header = QLabel(f"  {name}")
+                header.setStyleSheet(
+                    "font-weight: bold; color: #555; margin-top: 4px;"
+                )
+                self._items_layout.addWidget(header)
+                for sec_name, labels in items:
+                    # Section sub-header
+                    sec_header = QLabel(f"    {sec_name}")
+                    sec_header.setStyleSheet(
+                        "font-weight: bold; color: #777; margin-top: 2px;"
+                        " margin-left: 8px;"
+                    )
+                    self._items_layout.addWidget(sec_header)
+                    for label in labels:
+                        cb = QCheckBox(label)
+                        cb.setChecked(label not in hidden)
+                        cb.setProperty("subplot_key", key)
+                        cb.setProperty("label_text", label)
+                        cb.stateChanged.connect(self._on_item_toggled)
+                        self._items_layout.addWidget(cb)
+                        self._item_checks.append((key, label, cb))
+            else:
+                # Regular flat label list
+                header = QLabel(f"  {name}")
+                header.setStyleSheet(
+                    "font-weight: bold; color: #555; margin-top: 4px;"
+                )
+                self._items_layout.addWidget(header)
+                for label in items:
+                    cb = QCheckBox(label)
+                    cb.setChecked(label not in hidden)
+                    cb.setProperty("subplot_key", key)
+                    cb.setProperty("label_text", label)
+                    cb.stateChanged.connect(self._on_item_toggled)
+                    self._items_layout.addWidget(cb)
+                    self._item_checks.append((key, label, cb))
 
         self._updating = False
 
@@ -283,7 +379,36 @@ class LegendPanel(QWidget):
         self.frame_check.setChecked(lc.frame_on)
         self.frame_alpha.setValue(lc.frame_alpha)
         self.shadow_check.setChecked(lc.shadow)
+
+        # Adjacent controls
+        adj_side = getattr(lc, 'adjacent_side', 'right')
+        side_text = _ADJACENT_SIDE_REVERSE.get(adj_side, "Right")
+        idx = self.adjacent_side_combo.findText(side_text)
+        if idx >= 0:
+            self.adjacent_side_combo.setCurrentIndex(idx)
+        adj_target = getattr(lc, 'adjacent_target', '') or ''
+        idx = self.adjacent_target_combo.findData(adj_target)
+        if idx >= 0:
+            self.adjacent_target_combo.setCurrentIndex(idx)
+        else:
+            self.adjacent_target_combo.setCurrentIndex(0)
+        self.offset_x_spin.setValue(
+            getattr(lc, 'offset_x', 0.0)
+        )
+        self.offset_y_spin.setValue(
+            getattr(lc, 'offset_y', 0.0)
+        )
+
+        self._toggle_adjacent_controls(pl_text)
         self._updating = False
+
+    def _toggle_adjacent_controls(self, placement_text: str):
+        """Show/hide the adjacent-only controls based on placement."""
+        is_adj = (placement_text == "Adjacent")
+        self._adjacent_side_label.setVisible(is_adj)
+        self.adjacent_side_combo.setVisible(is_adj)
+        self._adjacent_target_label.setVisible(is_adj)
+        self.adjacent_target_combo.setVisible(is_adj)
 
     def _read_controls(self) -> dict:
         """Read current control values into a dict."""
@@ -299,6 +424,14 @@ class LegendPanel(QWidget):
             "frame_on": self.frame_check.isChecked(),
             "frame_alpha": self.frame_alpha.value(),
             "shadow": self.shadow_check.isChecked(),
+            "adjacent_side": _ADJACENT_SIDE_MAP.get(
+                self.adjacent_side_combo.currentText(), "right"
+            ),
+            "adjacent_target": (
+                self.adjacent_target_combo.currentData() or ""
+            ),
+            "offset_x": self.offset_x_spin.value(),
+            "offset_y": self.offset_y_spin.value(),
         }
 
     def _save_to_checked(self):
@@ -378,7 +511,9 @@ class LegendPanel(QWidget):
         if self._settings and self._subplot_checks:
             first = self._settings.legend_for(self._subplot_checks[0][0])
             for attr in ("show", "location", "placement", "ncol", "fontsize",
-                         "markerscale", "frame_on", "frame_alpha", "shadow"):
+                         "markerscale", "frame_on", "frame_alpha", "shadow",
+                         "adjacent_side", "adjacent_target",
+                         "offset_x", "offset_y"):
                 setattr(cfg, attr, getattr(first, attr))
 
     def read_from(self, cfg):

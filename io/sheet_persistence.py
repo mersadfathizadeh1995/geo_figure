@@ -554,9 +554,11 @@ def _save_soil_profile_group(group) -> dict:
         "show_median": group.show_median,
         "median_color": group.median_color,
         "median_line_width": group.median_line_width,
+        "median_label": group.median_label,
         "show_percentile": group.show_percentile,
         "percentile_color": group.percentile_color,
         "percentile_alpha": group.percentile_alpha,
+        "percentile_label": group.percentile_label,
         "show_individual": group.show_individual,
     }
 
@@ -584,9 +586,11 @@ def _load_soil_profile_group(meta: dict, soil_profiles: list):
         show_median=meta.get("show_median", True),
         median_color=meta.get("median_color", "#D32F2F"),
         median_line_width=meta.get("median_line_width", 2.5),
+        median_label=meta.get("median_label", "Median"),
         show_percentile=meta.get("show_percentile", True),
         percentile_color=meta.get("percentile_color", "#E57373"),
         percentile_alpha=meta.get("percentile_alpha", 80),
+        percentile_label=meta.get("percentile_label", "5-95 Percentile"),
         show_individual=meta.get("show_individual", True),
     )
     return group

@@ -8,6 +8,9 @@ from matplotlib.gridspec import GridSpec
 from typing import Dict
 
 from geo_figure.core.models import FigureState
+from geo_figure.core.subplot_types import (
+    UNSET, DC, VS_EXTRACT, PROFILE, SOIL_PROFILE,
+)
 from ..models import StudioSettings
 
 
@@ -140,10 +143,10 @@ def _create_grid_layout(
     while len(col_ratios) < cols:
         col_ratios.append(1.0)
 
-    # Detect which logical columns contain at least one vs_profile
+    # Detect which logical columns contain at least one depth-based subplot
     vs_cols = set()
     for c in range(cols):
-        if any(stypes.get(f"cell_{r}_{c}") == "vs_profile"
+        if any(stypes.get(f"cell_{r}_{c}") in (VS_EXTRACT, PROFILE, SOIL_PROFILE)
                for r in range(rows)):
             vs_cols.add(c)
 
@@ -162,11 +165,10 @@ def _create_grid_layout(
     for r in range(rows):
         for c in range(cols):
             key = f"cell_{r}_{c}"
-            cell_type = stypes.get(key, "dc")
+            cell_type = stypes.get(key, UNSET)
             cell_sections = sections.get(key)
 
-            if cell_type == "vs_profile" and cell_sections and len(cell_sections) > 1:
-                # Multi-property sub-sections
+            if cell_type == SOIL_PROFILE and cell_sections and len(cell_sections) > 1:
                 n_sec = len(cell_sections)
                 inner = GridSpecFromSubplotSpec(
                     1, n_sec,
@@ -184,8 +186,7 @@ def _create_grid_layout(
                     axes[sec_key] = ax
                 if first_ax is not None:
                     axes[key] = first_ax
-            elif cell_type == "vs_profile":
-                # Subdivide this single cell into 2 sub-columns
+            elif cell_type == VS_EXTRACT:
                 inner = GridSpecFromSubplotSpec(
                     1, 2,
                     subplot_spec=gs[r, c],
@@ -196,9 +197,8 @@ def _create_grid_layout(
                 ax_sig = fig.add_subplot(inner[0, 1], sharey=ax_vs)
                 axes[key] = ax_vs
                 axes[f"{key}_sigma"] = ax_sig
-            elif c in vs_cols:
-                axes[key] = fig.add_subplot(gs[r, c])
             else:
+                # DC, PROFILE, SOIL_PROFILE (no sections), UNSET
                 axes[key] = fig.add_subplot(gs[r, c])
 
     return axes

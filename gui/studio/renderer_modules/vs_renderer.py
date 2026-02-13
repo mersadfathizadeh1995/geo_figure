@@ -327,6 +327,7 @@ def _render_group_stats(ax, group, vf: float):
             depth, p05, p95,
             color=group.percentile_color,
             alpha=alpha_frac,
+            label=group.percentile_label or "5-95 Percentile",
             zorder=4,
         )
 
@@ -337,6 +338,6 @@ def _render_group_stats(ax, group, vf: float):
             median, depth,
             color=group.median_color,
             linewidth=group.median_line_width,
-            label=f"{group.display_name} Median",
+            label=group.median_label or "Median",
             zorder=5,
         )

@@ -259,7 +259,7 @@ def _add_group_stats(canvas, group: SoilProfileGroup):
         pen = pg.mkPen(color=c, width=group.median_line_width)
         med_line = pg.PlotDataItem(
             median, depth, pen=pen,
-            name=f"{group.display_name} Median",
+            name=group.median_label or "Median",
         )
         plot.addItem(med_line)
         item_list.append(med_line)

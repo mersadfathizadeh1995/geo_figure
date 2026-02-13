@@ -386,9 +386,9 @@ def _read_multi_profile_csv(arr, col_map, name, filepath) -> List[SoilProfile]:
         else:
             continue
 
-        pname = f"{name} #{pid}"
+        pname = f"Profile_{pid}"
         if model_id:
-            pname = f"{name} #{model_id}"
+            pname = f"Profile_{pid}_Model_{model_id}"
 
         profiles.append(SoilProfile(
             n_layers=n, thickness=thickness, top_depth=top, bot_depth=bot,

@@ -288,9 +288,10 @@ class EnsembleHandlersMixin:
             if target_key is None:
                 target_key = canvas.active_subplot or "main"
 
-            # Convert target cell to vs_profile type
-            if canvas._subplot_types.get(target_key) != "vs_profile":
-                canvas.set_subplot_type(target_key, "vs_profile")
+            # Convert target cell to vs_extract type
+            from geo_figure.core.subplot_types import VS_EXTRACT
+            if canvas._subplot_types.get(target_key) != VS_EXTRACT:
+                canvas.set_subplot_type(target_key, VS_EXTRACT)
             canvas.rename_subplot(target_key, ptype_label)
 
             prof = VsProfileData(
@@ -380,9 +381,10 @@ class EnsembleHandlersMixin:
             if active and not active.endswith("_sigma"):
                 target_key = active
                 use_existing = True
-                # Convert the cell to vs_profile type and rebuild
-                if canvas._subplot_types.get(active) != "vs_profile":
-                    canvas.set_subplot_type(active, "vs_profile")
+                # Convert the cell to vs_extract type and rebuild
+                from geo_figure.core.subplot_types import VS_EXTRACT
+                if canvas._subplot_types.get(active) != VS_EXTRACT:
+                    canvas.set_subplot_type(active, VS_EXTRACT)
 
         if not use_existing:
             # Create a dedicated Vs Profile sheet with the 2-panel layout
@@ -883,11 +885,19 @@ class EnsembleHandlersMixin:
         sp_dict = sd.get("soil_profiles", {})
         profile = sp_dict.get(uid)
         if profile:
-            # Find the group this profile belongs to (if any)
-            group = self._find_group_for_profile(uid)
-            self.properties.show_soil_profile(uid, profile, group=group)
+            self.properties.show_soil_profile(uid, profile, group=None)
             self.status_bar.showMessage(
                 f"Selected: {profile.display_name} | {profile.n_layers} layers"
+            )
+            return
+        # Check if the uid refers to a group root
+        groups = sd.get("soil_profile_groups", {})
+        group = groups.get(uid)
+        if group:
+            self.properties.show_soil_profile_group_only(uid, group)
+            self.status_bar.showMessage(
+                f"Selected group: {group.display_name} | "
+                f"{len(group.profiles)} profiles"
             )
 
     def _on_soil_profile_visibility(self, uid: str, visible: bool):
@@ -905,6 +915,16 @@ class EnsembleHandlersMixin:
         sd = self._sheet_data.get(self._current_sheet_idx, {})
         sp_dict = sd.get("soil_profiles", {})
         sp_dict.pop(uid, None)
+
+        # If this profile belongs to a group, remove it and invalidate stats
+        group = self._find_group_for_profile(uid)
+        if group:
+            group.profiles = [p for p in group.profiles if p.uid != uid]
+            group.depth_grid = None
+            group.median_values = None
+            group.p05_values = None
+            group.p95_values = None
+
         canvas = self.sheet_tabs.get_current_canvas()
         canvas.remove_soil_profile(uid)
         self.curve_tree.remove_soil_profile(uid)
@@ -942,34 +962,39 @@ class EnsembleHandlersMixin:
         group.show_individual = self.properties.sp_show_individual_check.isChecked()
         group.median_color = self.properties.sp_median_color_hex.text()
         group.median_line_width = self.properties.sp_median_width_spin.value()
+        group.median_label = (
+            self.properties.sp_median_name_edit.text().strip() or "Median"
+        )
         group.percentile_color = self.properties.sp_pct_color_hex.text()
         group.percentile_alpha = round(
             self.properties.sp_pct_alpha_spin.value() * 255 / 100
+        )
+        group.percentile_label = (
+            self.properties.sp_pct_name_edit.text().strip() or "5-95 Percentile"
         )
 
         # Apply individual visibility based on show_individual toggle
         for prof in group.profiles:
             prof.visible = group.show_individual
 
-        # Compute statistics if not yet done
-        if not group.has_statistics:
-            from geo_figure.core.soil_profile_stats import compute_group_statistics
-            ok = compute_group_statistics(
-                group,
-                depth_step=0.5,
-                render_property=group.profiles[0].render_property if group.profiles else "vs",
+        # Always (re)compute statistics so changes in profile count are reflected
+        from geo_figure.core.soil_profile_stats import compute_group_statistics
+        ok = compute_group_statistics(
+            group,
+            depth_step=0.5,
+            render_property=group.profiles[0].render_property if group.profiles else "vs",
+        )
+        if ok:
+            self.log_panel.log_success(
+                f"Computed statistics for {group.display_name}: "
+                f"{len(group.depth_grid)} depth points, "
+                f"{len([p for p in group.profiles if p.visible])} profiles"
             )
-            if ok:
-                self.log_panel.log_success(
-                    f"Computed statistics for {group.display_name}: "
-                    f"{len(group.depth_grid)} depth points, "
-                    f"{len([p for p in group.profiles if p.visible])} profiles"
-                )
-            else:
-                self.log_panel.log_error(
-                    f"Failed to compute statistics for {group.display_name}: "
-                    f"need at least 2 visible profiles"
-                )
+        else:
+            self.log_panel.log_error(
+                f"Failed to compute statistics for {group.display_name}: "
+                f"need at least 2 visible profiles"
+            )
 
         # Rebuild canvas rendering
         canvas = self.sheet_tabs.get_current_canvas()
@@ -982,3 +1007,70 @@ class EnsembleHandlersMixin:
 
         # Update properties panel
         self.properties.show_soil_profile_group(group_uid, group)
+
+    def _on_group_palette_applied(self, group_uid: str, args: list):
+        """Apply a colour palette to all profiles in a group."""
+        palette_name = args[0] if args else "Rainbow"
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        groups = sd.get("soil_profile_groups", {})
+        group = groups.get(group_uid)
+        if group is None or not group.profiles:
+            return
+
+        from geo_figure.core.models import generate_palette
+        colors = generate_palette(palette_name, len(group.profiles))
+
+        canvas = self.sheet_tabs.get_current_canvas()
+        for prof, color in zip(group.profiles, colors):
+            prof.color = color
+            canvas._rebuild_soil_profile(prof.uid)
+
+        self._rebuild_tree()
+        self.log_panel.log_info(
+            f"Applied '{palette_name}' palette to {len(group.profiles)} profiles"
+        )
+
+    def _on_subplot_cleared(self, key: str):
+        """Remove all data belonging to a cleared subplot from internal dicts."""
+        sd = self._sheet_data.get(self._current_sheet_idx, {})
+        section_keys = {key}
+        canvas = self.sheet_tabs.get_current_canvas()
+        secs = canvas._soil_profile_sections.get(key)
+        if secs:
+            for prop in secs:
+                section_keys.add(f"{key}_sp_{prop}")
+
+        def _on_key(data):
+            sk = getattr(data, "subplot_key", None)
+            return sk in section_keys or sk == key
+
+        # Remove curves
+        for uid in [u for u, c in self._curves.items() if _on_key(c)]:
+            del self._curves[uid]
+
+        # Remove ensembles
+        for uid in [u for u, e in self._ensembles.items() if _on_key(e)]:
+            del self._ensembles[uid]
+
+        # Remove vs profiles
+        for uid in [u for u, p in self._vs_profiles.items() if _on_key(p)]:
+            del self._vs_profiles[uid]
+
+        # Remove soil profiles
+        sp_dict = sd.get("soil_profiles", {})
+        removed_sp = [u for u, p in sp_dict.items() if _on_key(p)]
+        for uid in removed_sp:
+            del sp_dict[uid]
+
+        # Remove soil profile groups whose profiles were all removed
+        grp_dict = sd.get("soil_profile_groups", {})
+        empty_grps = [
+            gid for gid, g in grp_dict.items()
+            if all(p.uid not in sp_dict for p in g.profiles)
+        ]
+        for gid in empty_grps:
+            del grp_dict[gid]
+
+        self._rebuild_tree()
+        self.properties_panel.clear()
+        self.log_panel.log_info(f"Cleared data on subplot '{key}'")

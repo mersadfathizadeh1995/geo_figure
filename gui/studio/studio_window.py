@@ -285,17 +285,31 @@ class StudioWindow(QMainWindow):
 
     def _auto_configure_axes(self):
         """Set axis defaults from subplot types and canvas ranges."""
+        from geo_figure.core.subplot_types import DC, VS_EXTRACT, PROFILE, SOIL_PROFILE
         st = self._state
+        depth_types = {VS_EXTRACT, PROFILE, SOIL_PROFILE}
+        _DEFAULT_TITLES = {
+            DC: "Dispersion Curve",
+            VS_EXTRACT: "Vs Profile",
+            PROFILE: "Vs Profile",
+            SOIL_PROFILE: "Soil Profile",
+        }
         for key, _ in self._get_subplot_info():
             acfg = self._settings.axis_for(key)
-            cell_type = st.subplot_types.get(key, "dc")
-            if cell_type == "vs_profile" or key == "vs_profile":
+            cell_type = st.subplot_types.get(key, "unset")
+            # Seed title from subplot_names, then fall back to type default
+            if not acfg.title:
+                name = st.subplot_names.get(key, "")
+                if not name:
+                    name = _DEFAULT_TITLES.get(cell_type, "")
+                acfg.title = name
+            if cell_type in depth_types or key == "vs_profile":
                 acfg.invert_y = True
                 acfg.x_scale = "linear"
                 acfg.y_scale = "linear"
                 acfg.auto_x = False
                 acfg.auto_y = False
-            else:
+            elif cell_type == DC:
                 acfg.x_scale = "log"
 
             # Transfer canvas axis ranges as fallback limits
@@ -305,8 +319,7 @@ class StudioWindow(QMainWindow):
                 acfg.x_max = xmax
                 acfg.y_min = ymin
                 acfg.y_max = ymax
-                # Keep auto on only for non-Vs subplots
-                if cell_type != "vs_profile" and key != "vs_profile":
+                if cell_type not in depth_types and key != "vs_profile":
                     acfg.auto_x = True
                     acfg.auto_y = True
 
