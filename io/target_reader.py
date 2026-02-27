@@ -18,7 +18,7 @@ def read_target_file(filepath: str) -> Tuple[List[CurveData], Dict]:
     with open(filepath, 'rb') as f:
         raw = f.read()
 
-    with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as tar:
+    with tarfile.open(fileobj=io.BytesIO(raw), mode='r') as tar:
         xml_bytes = tar.extractfile('contents.xml').read()
 
     # Decode UTF-16 (BOM-detected)
